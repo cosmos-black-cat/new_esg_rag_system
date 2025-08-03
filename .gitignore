@@ -1,0 +1,7 @@
+venv/
+src/data/
+src/.env
+src/vector_db/
+src/results/
+src/__pycache__/
+*.pdf

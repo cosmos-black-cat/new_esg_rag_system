@@ -17,6 +17,7 @@ from datetime import datetime
 from tqdm import tqdm
 import numpy as np
 from difflib import SequenceMatcher
+from api_manager import GeminiAPIManager
 
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -812,7 +813,7 @@ class ESGExtractor:
         print("✅ ESG提取器初始化完成")
         if self.auto_dedupe:
             print("✅ 自動去重功能已啟用")
-    
+
     def _load_vector_database(self):
         """載入向量資料庫"""
         if not os.path.exists(self.vector_db_path):
@@ -831,19 +832,45 @@ class ESGExtractor:
         print(f"✅ 向量資料庫載入完成")
     
     def _init_llm(self):
-        """初始化LLM"""
+        """初始化LLM（多API支援）"""
         try:
-            print(f"🤖 初始化Gemini模型: {GEMINI_MODEL}")
-            self.llm = ChatGoogleGenerativeAI(
-                model=GEMINI_MODEL,
-                google_api_key=GOOGLE_API_KEY,
-                temperature=0.1,
-                max_tokens=1024
-            )
-            print("✅ Gemini模型初始化完成")
+            print(f"🤖 初始化Gemini多API管理器...")
+            
+            # 使用多API管理器
+            if len(GEMINI_API_KEYS) > 1:
+                print(f"🔄 啟用多API輪換模式，共 {len(GEMINI_API_KEYS)} 個Keys")
+                self.api_manager = GeminiAPIManager(
+                    api_keys=GEMINI_API_KEYS,
+                    model_name=GEMINI_MODEL
+                )
+                self.llm_mode = "multi_api"
+            else:
+                print("🔑 使用單API模式")
+                # 回退到傳統單API模式
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                self.llm = ChatGoogleGenerativeAI(
+                    model=GEMINI_MODEL,
+                    google_api_key=GEMINI_API_KEYS[0],
+                    temperature=0.1,
+                    max_tokens=1024
+                )
+                self.llm_mode = "single_api"
+            
+            print("✅ LLM初始化完成")
+            
         except Exception as e:
             print(f"⚠️ LLM初始化失敗: {e}")
             self.enable_llm = False
+
+    def _call_llm(self, prompt: str) -> str:
+        """統一的LLM調用介面"""
+        if self.llm_mode == "multi_api":
+            # 使用多API管理器
+            return self.api_manager.invoke(prompt)
+        else:
+            # 使用傳統單API
+            response = self.llm.invoke(prompt)
+            return response.content
     
     def stage1_filtering(self, documents: List[Document]) -> Tuple[List[Document], List[ExtractionMatch]]:
         """第一階段篩選：檢查文檔是否包含目標關鍵字"""
@@ -944,22 +971,25 @@ class ESGExtractor:
         return extractions
     
     def llm_enhancement(self, extractions: List[NumericExtraction]) -> List[NumericExtraction]:
-        """LLM增強：驗證和豐富提取結果"""
+        """LLM增強：驗證和豐富提取結果（支援多API輪換）"""
         if not self.enable_llm or not extractions:
             return extractions
         
         print("🤖 執行LLM增強...")
+        if self.llm_mode == "multi_api":
+            print(f"🔄 使用多API輪換模式處理 {len(extractions)} 個結果")
         
         enhanced_extractions = []
+        failed_count = 0
         
-        for extraction in tqdm(extractions, desc="LLM增強"):
+        for i, extraction in enumerate(tqdm(extractions, desc="LLM增強")):
             try:
                 # 構建驗證提示
                 prompt = self._build_verification_prompt(extraction)
                 
-                # 呼叫LLM
-                response = self.llm.invoke(prompt)
-                llm_result = self._parse_llm_response(response.content)
+                # 統一調用LLM
+                response_content = self._call_llm(prompt)
+                llm_result = self._parse_llm_response(response_content)
                 
                 # 更新提取結果
                 if llm_result and llm_result.get("is_relevant", True):
@@ -976,10 +1006,31 @@ class ESGExtractor:
                 enhanced_extractions.append(extraction)
                 
             except Exception as e:
-                print(f"⚠️ LLM增強失敗: {e}")
+                print(f"⚠️ LLM增強失敗 (第{i+1}個): {e}")
                 enhanced_extractions.append(extraction)  # 保留原始結果
+                failed_count += 1
+        
+        # 顯示處理統計
+        success_rate = ((len(extractions) - failed_count) / len(extractions)) * 100
+        print(f"✅ LLM增強完成：成功率 {success_rate:.1f}% ({len(extractions)-failed_count}/{len(extractions)})")
+        
+        # 顯示API使用統計（如果是多API模式）
+        if self.llm_mode == "multi_api":
+            self.print_api_usage_stats()
         
         return enhanced_extractions
+    
+    def print_api_usage_stats(self):
+        """打印API使用統計"""
+        if hasattr(self, 'api_manager'):
+            print("\n🔄 API使用統計:")
+            self.api_manager.print_usage_statistics()
+    
+    def get_api_usage_summary(self) -> dict:
+        """獲取API使用摘要"""
+        if hasattr(self, 'api_manager'):
+            return self.api_manager.get_usage_statistics()
+        return {"total_requests": 0, "keys_usage": {}}
     
     def export_to_excel(self, extractions: List[NumericExtraction], summary: ProcessingSummary) -> str:
         """匯出結果到Excel"""
@@ -1264,5 +1315,46 @@ def main():
         import traceback
         traceback.print_exc()
 
+# 使用示例的輔助函數
+def test_multi_api_functionality():
+    """測試多API功能"""
+    print("🧪 測試多API輪換功能")
+    print("=" * 50)
+    
+    # 測試API管理器
+    try:
+        if len(GEMINI_API_KEYS) > 1:
+            api_manager = GeminiAPIManager(
+                api_keys=GEMINI_API_KEYS,
+                model_name=GEMINI_MODEL
+            )
+            
+            # 測試多次調用
+            test_prompts = [
+                "解釋什麼是再生塑膠",
+                "計算50% + 30%",
+                "翻譯：recycled plastic",
+                "列出環保材料的好處",
+                "ESG是什麼的縮寫？"
+            ]
+            
+            print(f"🔄 測試 {len(test_prompts)} 次API調用...")
+            
+            for i, prompt in enumerate(test_prompts, 1):
+                try:
+                    response = api_manager.invoke(prompt)
+                    print(f"✅ 調用 {i}: 成功")
+                except Exception as e:
+                    print(f"❌ 調用 {i}: 失敗 - {e}")
+            
+            # 顯示使用統計
+            api_manager.print_usage_statistics()
+            
+        else:
+            print("⚠️ 只有一個API Key，無法測試多API輪換")
+            
+    except Exception as e:
+        print(f"❌ 測試失敗: {e}")
+
 if __name__ == "__main__":
-    main()
+    test_multi_api_functionality()
