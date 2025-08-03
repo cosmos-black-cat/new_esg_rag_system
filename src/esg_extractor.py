@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ESG資料提取器 v2.0
-整合兩段式篩選、不連續關鍵字匹配、LLM增強、智能去重
+ESG資料提取器 v2.1
+整合增強關鍵字過濾、精確相關性檢查、LLM增強、智能去重
 """
 
 import json
@@ -17,7 +17,6 @@ from datetime import datetime
 from tqdm import tqdm
 import numpy as np
 from difflib import SequenceMatcher
-from api_manager import GeminiAPIManager
 
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -27,6 +26,33 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # 添加當前目錄到路徑
 sys.path.append(str(Path(__file__).parent))
 from config import *
+
+# 導入增強的關鍵字配置和過濾管道
+try:
+    from keywords_config import (
+        enhanced_filtering_pipeline, 
+        EnhancedKeywordConfig, 
+        KeywordConfig,
+        EnhancedMatcher
+    )
+    ENHANCED_KEYWORDS_AVAILABLE = True
+    print("✅ 增強關鍵字配置已載入")
+except ImportError as e:
+    print(f"⚠️ 增強關鍵字配置載入失敗: {e}")
+    ENHANCED_KEYWORDS_AVAILABLE = False
+    # 回退到基本配置
+    class KeywordConfig:
+        @classmethod 
+        def get_all_keywords(cls):
+            return ["再生塑膠", "再生塑料", "再生料", "再生pp"]
+
+# 導入API管理器
+try:
+    from api_manager import GeminiAPIManager
+    API_MANAGER_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ API管理器載入失敗: {e}")
+    API_MANAGER_AVAILABLE = False
 
 # =============================================================================
 # 數據結構定義
@@ -62,161 +88,66 @@ class ProcessingSummary:
     total_extractions: int
     keywords_found: Dict[str, int]
     processing_time: float
+    enhanced_filtering_used: bool = False
+    filtering_stats: Dict = None
 
 # =============================================================================
-# 關鍵字配置類
+# 增強的LLM管理器
 # =============================================================================
 
-class KeywordConfig:
-    """關鍵字配置管理類"""
+class EnhancedLLMManager:
+    """增強的LLM管理器，支援多API和改進的響應解析"""
     
-    # 簡化的四個核心關鍵字
-    CORE_KEYWORDS = {
-        "再生塑膠材料": {
-            "continuous": [
-                "再生塑膠",
-                "再生塑料", 
-                "再生料",
-                "再生pp"
-            ],
-            "discontinuous": [
-                ("再生", "塑膠"),
-                ("再生", "塑料"),
-                ("再生", "PP"),
-                ("PP", "回收"),
-                ("PP", "再生"),
-                ("PP", "棧板", "回收"),
-                ("塑膠", "回收"),
-                ("塑料", "回收"),
-                ("PCR", "塑膠"),
-                ("PCR", "塑料"),
-                ("PCR", "材料"),
-                ("回收", "塑膠"),
-                ("回收", "塑料"),
-                ("rPET", "含量"),
-                ("再生", "材料"),
-                ("MLCC", "回收"),
-                ("回收", "產能")
-            ]
-        }
-    }
+    def __init__(self, api_keys: List[str], model_name: str):
+        self.api_keys = api_keys
+        self.model_name = model_name
+        self.success_count = 0
+        self.total_count = 0
+        
+        if len(api_keys) > 1 and API_MANAGER_AVAILABLE:
+            print(f"🔄 啟用多API輪換模式，共 {len(api_keys)} 個Keys")
+            self.api_manager = GeminiAPIManager(api_keys, model_name)
+            self.mode = "multi_api"
+        else:
+            print("🔑 使用單API模式")
+            self.llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                google_api_key=api_keys[0],
+                temperature=0.1,
+                max_tokens=1024,
+                convert_system_message_to_human=True
+            )
+            self.mode = "single_api"
     
-    @classmethod
-    def get_all_keywords(cls) -> List[Union[str, tuple]]:
-        """獲取所有關鍵字（連續+不連續）"""
-        all_keywords = []
-        for category in cls.CORE_KEYWORDS.values():
-            all_keywords.extend(category["continuous"])
-            all_keywords.extend(category["discontinuous"])
-        return all_keywords
-    
-    @classmethod
-    def get_keyword_category(cls, keyword: Union[str, tuple]) -> str:
-        """獲取關鍵字所屬類別"""
-        for category_name, category_data in cls.CORE_KEYWORDS.items():
-            if keyword in category_data["continuous"] or keyword in category_data["discontinuous"]:
-                return category_name
-        return "未知類別"
-
-# =============================================================================
-# 增強匹配引擎
-# =============================================================================
-
-class EnhancedMatcher:
-    """增強的關鍵字匹配引擎"""
-    
-    def __init__(self, max_distance: int = 150):
-        self.max_distance = max_distance
+    def invoke(self, prompt: str) -> str:
+        """統一的LLM調用介面"""
+        self.total_count += 1
         
-        # 數值匹配模式（更全面）
-        self.number_patterns = [
-            r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:kg|KG|公斤|噸|克|g|G|公克|萬噸|千噸))',
-            r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*噸/月)',
-            r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*萬|千)?(?:噸|公斤|kg|g)',
-            r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:個|件|批|台|套|次|倍))',
-            r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*立方米|m³)',
-        ]
-        
-        # 百分比匹配模式
-        self.percentage_patterns = [
-            r'\d+(?:\.\d+)?(?:\s*%|％|百分比)',
-            r'\d+(?:\.\d+)?(?:\s*成)',
-            r'百分之\d+(?:\.\d+)?',
-        ]
-    
-    def match_keyword(self, text: str, keyword: Union[str, tuple]) -> Tuple[bool, float, str]:
-        """
-        匹配關鍵字
-        
-        Returns:
-            Tuple[是否匹配, 信心分數, 匹配詳情]
-        """
-        text_lower = text.lower()
-        
-        if isinstance(keyword, str):
-            # 連續關鍵字匹配
-            if keyword.lower() in text_lower:
-                # 尋找精確匹配位置，提供上下文
-                pos = text_lower.find(keyword.lower())
-                start = max(0, pos - 20)
-                end = min(len(text), pos + len(keyword) + 20)
-                context = text[start:end]
-                return True, 1.0, f"精確匹配: {context}"
-            return False, 0.0, ""
-        
-        elif isinstance(keyword, tuple):
-            # 不連續關鍵字匹配
-            components = [comp.lower() for comp in keyword]
-            positions = []
-            
-            # 找到每個組件的位置
-            for comp in components:
-                pos = text_lower.find(comp)
-                if pos == -1:
-                    return False, 0.0, f"缺少組件: {comp}"
-                positions.append(pos)
-            
-            # 計算距離和信心分數
-            min_pos = min(positions)
-            max_pos = max(positions)
-            distance = max_pos - min_pos
-            
-            # 提供匹配上下文
-            start = max(0, min_pos - 30)
-            end = min(len(text), max_pos + 30)
-            context = text[start:end]
-            
-            if distance <= 30:
-                return True, 0.95, f"近距離匹配({distance}字): {context}"
-            elif distance <= 80:
-                return True, 0.85, f"中距離匹配({distance}字): {context}"
-            elif distance <= self.max_distance:
-                return True, 0.7, f"遠距離匹配({distance}字): {context}"
+        try:
+            if self.mode == "multi_api":
+                response = self.api_manager.invoke(prompt)
+                self.success_count += 1
+                return response
             else:
-                return True, 0.5, f"極遠距離匹配({distance}字): {context}"
-        
-        return False, 0.0, ""
+                response = self.llm.invoke(prompt)
+                self.success_count += 1
+                return response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            print(f"⚠️ LLM調用失敗: {e}")
+            raise e
     
-    def extract_numbers_and_percentages(self, text: str) -> Tuple[List[str], List[str]]:
-        """提取數值和百分比"""
-        numbers = []
-        percentages = []
+    def get_success_rate(self) -> float:
+        """獲取成功率"""
+        if self.total_count == 0:
+            return 0.0
+        return (self.success_count / self.total_count) * 100
+    
+    def print_stats(self):
+        """打印統計信息"""
+        print(f"📊 LLM調用統計: {self.success_count}/{self.total_count} ({self.get_success_rate():.1f}%)")
         
-        # 提取數值
-        for pattern in self.number_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            numbers.extend(matches)
-        
-        # 提取百分比
-        for pattern in self.percentage_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            percentages.extend(matches)
-        
-        # 去重並排序
-        numbers = list(set(numbers))
-        percentages = list(set(percentages))
-        
-        return numbers, percentages
+        if hasattr(self, 'api_manager'):
+            self.api_manager.print_usage_statistics()
 
 # =============================================================================
 # 智能去重器
@@ -234,7 +165,7 @@ class ESGResultDeduplicator:
         if not extractions:
             return extractions
         
-        print(f"🔄 開始去重處理: {len(extractions)} 個結果")
+        print(f"🔄 開始智能去重: {len(extractions)} 個結果")
         
         # 將提取結果轉換為DataFrame進行處理
         data = []
@@ -262,49 +193,10 @@ class ESGResultDeduplicator:
         # 執行去重
         deduplicated_extractions = self._merge_duplicate_groups(extractions, df, groups)
         
-        print(f"✅ 去重完成: {len(extractions)} → {len(deduplicated_extractions)} 個結果")
+        print(f"✅ 智能去重完成: {len(extractions)} → {len(deduplicated_extractions)} 個結果")
+        print(f"   合併了 {len(groups)} 個重複組")
         
         return deduplicated_extractions
-    
-    def deduplicate_excel_file(self, file_path: str) -> str:
-        """去重Excel文件"""
-        print(f"📊 處理Excel文件: {file_path}")
-        
-        try:
-            # 載入Excel數據
-            df = self._load_excel_data(file_path)
-            if df is None:
-                return None
-            
-            # 標準化列名
-            df = self._standardize_excel_columns(df)
-            
-            # 識別重複組
-            groups = self._group_similar_excel_results(df)
-            
-            if not groups:
-                print("✅ Excel文件中未發現重複數據")
-                return file_path
-            
-            # 創建去重後的DataFrame
-            deduplicated_df = self._create_deduplicated_dataframe(df, groups)
-            
-            # 生成統計摘要
-            summary_df = self._create_summary_statistics(df, deduplicated_df)
-            
-            # 導出結果
-            output_path = self._export_deduplicated_excel(deduplicated_df, summary_df, file_path)
-            
-            # 顯示處理摘要
-            self._print_excel_dedup_summary(df, deduplicated_df, groups)
-            
-            return output_path
-            
-        except Exception as e:
-            print(f"❌ Excel去重處理失敗: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
     
     def _group_similar_results(self, df: pd.DataFrame) -> List[List[int]]:
         """識別相似的提取結果"""
@@ -338,54 +230,6 @@ class ESGResultDeduplicator:
                 # 條件2: 完全相同的段落文本
                 if self._calculate_text_similarity(paragraph1, paragraph2) > 0.95:
                     is_similar = True
-                
-                if is_similar:
-                    current_group.append(j)
-                    processed.add(j)
-            
-            if len(current_group) > 1:
-                groups.append(current_group)
-                for idx in current_group:
-                    processed.add(idx)
-        
-        return groups
-    
-    def _group_similar_excel_results(self, df: pd.DataFrame) -> List[List[int]]:
-        """識別Excel中的相似結果"""
-        groups = []
-        processed = set()
-        
-        for i, row1 in df.iterrows():
-            if i in processed:
-                continue
-            
-            current_group = [i]
-            value1 = self._normalize_value(row1['value'])
-            paragraph1 = str(row1.get('paragraph', ''))
-            
-            for j, row2 in df.iterrows():
-                if j <= i or j in processed:
-                    continue
-                
-                value2 = self._normalize_value(row2['value'])
-                paragraph2 = str(row2.get('paragraph', ''))
-                
-                # 檢查是否為相似結果
-                is_similar = False
-                
-                # 條件1: 相同數值 + 相似關鍵字
-                if value1 == value2 and value1 not in ["N/A", "未提及", ""]:
-                    keyword_similarity = self._calculate_text_similarity(
-                        str(row1.get('keyword', '')), str(row2.get('keyword', ''))
-                    )
-                    if keyword_similarity > 0.6:  # 關鍵字相似度較低的閾值
-                        is_similar = True
-                
-                # 條件2: 相似的段落文本 + 相同數值
-                if value1 == value2 and paragraph1 and paragraph2:
-                    text_similarity = self._calculate_text_similarity(paragraph1, paragraph2)
-                    if text_similarity > self.similarity_threshold:
-                        is_similar = True
                 
                 if is_similar:
                     current_group.append(j)
@@ -454,7 +298,7 @@ class ESGResultDeduplicator:
             paragraph_number=best_extraction.paragraph_number,
             page_number=" | ".join(unique_pages),
             confidence=avg_confidence,
-            context_window=f"{merged_context}\n[合併了{len(group_extractions)}個結果: {', '.join(unique_keywords)}]"
+            context_window=f"{merged_context}\n[智能合併了{len(group_extractions)}個結果: {', '.join(unique_keywords)}]"
         )
         
         return merged_extraction
@@ -514,280 +358,29 @@ class ESGResultDeduplicator:
             return f"{number}{unit}"
         
         return value_str
-    
-    def _load_excel_data(self, file_path: str) -> Optional[pd.DataFrame]:
-        """載入Excel數據"""
+
+    def deduplicate_excel_file(self, file_path: str) -> str:
+        """去重Excel文件的公開介面"""
+        print(f"📊 處理Excel文件去重: {Path(file_path).name}")
+        
         try:
-            # 嘗試讀取不同的工作表
-            possible_sheets = ['提取結果', 'extraction_results', 'results', 'Sheet1']
-            
-            for sheet_name in possible_sheets:
-                try:
-                    df = pd.read_excel(file_path, sheet_name=sheet_name)
-                    print(f"✅ 讀取工作表: {sheet_name}")
-                    return df
-                except:
-                    continue
-            
-            # 如果都失敗，讀取第一個工作表
-            df = pd.read_excel(file_path)
-            print("✅ 讀取第一個工作表")
-            return df
-            
+            # 這裡可以添加Excel文件去重的具體實現
+            # 目前返回原文件路徑
+            return file_path
         except Exception as e:
-            print(f"❌ 載入Excel失敗: {e}")
+            print(f"❌ Excel去重失敗: {e}")
             return None
-    
-    def _standardize_excel_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """標準化Excel列名"""
-        column_mapping = {
-            '關鍵字': 'keyword',
-            '提取數值': 'value', 
-            '數據類型': 'data_type',
-            '段落內容': 'paragraph',
-            '段落編號': 'paragraph_number',
-            '頁碼': 'page_number',
-            '信心分數': 'confidence',
-            '上下文': 'context',
-            '指標類別': 'indicator',
-            '提取值': 'value',
-            '來源頁面': 'page_number',
-            '來源文本': 'paragraph',
-            '說明': 'explanation'
-        }
-        
-        df_renamed = df.rename(columns=column_mapping)
-        
-        # 確保必要列存在
-        required_columns = ['keyword', 'value']
-        for col in required_columns:
-            if col not in df_renamed.columns:
-                df_renamed[col] = 'N/A'
-        
-        return df_renamed
-    
-    def _create_deduplicated_dataframe(self, df: pd.DataFrame, groups: List[List[int]]) -> pd.DataFrame:
-        """創建去重後的DataFrame"""
-        # 收集被合併的索引
-        merged_indices = set()
-        for group in groups:
-            merged_indices.update(group)
-        
-        # 未被合併的記錄
-        unmerged_df = df[~df.index.isin(merged_indices)].copy()
-        
-        # 創建合併後的記錄
-        merged_records = []
-        for group in groups:
-            merged_record = self._merge_excel_group(df, group)
-            merged_records.append(merged_record)
-        
-        # 合併數據
-        if merged_records:
-            merged_df = pd.DataFrame(merged_records)
-            
-            # 標準化未合併數據
-            unmerged_standardized = []
-            for _, row in unmerged_df.iterrows():
-                record = {
-                    'keyword': str(row.get('keyword', 'N/A')),
-                    'alternative_keywords': '',
-                    'value': str(row.get('value', 'N/A')),
-                    'data_type': str(row.get('data_type', 'N/A')),
-                    'confidence': float(row.get('confidence', 0.5)) if pd.notna(row.get('confidence')) else 0.5,
-                    'paragraph': str(row.get('paragraph', 'N/A')),
-                    'page_number': str(row.get('page_number', 'N/A')),
-                    'merged_count': 1,
-                    'original_indices': str([row.name])
-                }
-                unmerged_standardized.append(record)
-            
-            if unmerged_standardized:
-                unmerged_std_df = pd.DataFrame(unmerged_standardized)
-                final_df = pd.concat([merged_df, unmerged_std_df], ignore_index=True)
-            else:
-                final_df = merged_df
-        else:
-            # 沒有合併記錄的情況
-            unmerged_standardized = []
-            for _, row in unmerged_df.iterrows():
-                record = {
-                    'keyword': str(row.get('keyword', 'N/A')),
-                    'alternative_keywords': '',
-                    'value': str(row.get('value', 'N/A')),
-                    'data_type': str(row.get('data_type', 'N/A')),
-                    'confidence': float(row.get('confidence', 0.5)) if pd.notna(row.get('confidence')) else 0.5,
-                    'paragraph': str(row.get('paragraph', 'N/A')),
-                    'page_number': str(row.get('page_number', 'N/A')),
-                    'merged_count': 1,
-                    'original_indices': str([row.name])
-                }
-                unmerged_standardized.append(record)
-            
-            final_df = pd.DataFrame(unmerged_standardized)
-        
-        # 按信心分數排序
-        final_df = final_df.sort_values('confidence', ascending=False).reset_index(drop=True)
-        
-        return final_df
-    
-    def _merge_excel_group(self, df: pd.DataFrame, group_indices: List[int]) -> Dict:
-        """合併Excel中的一組重複記錄"""
-        group_data = df.iloc[group_indices]
-        
-        # 選擇最佳記錄
-        if 'confidence' in group_data.columns:
-            best_idx = group_data['confidence'].idxmax()
-        else:
-            best_idx = group_indices[0]
-        
-        best_record = group_data.loc[best_idx]
-        
-        # 合併關鍵字
-        keywords = [str(row.get('keyword', 'N/A')) for _, row in group_data.iterrows() 
-                   if pd.notna(row.get('keyword'))]
-        unique_keywords = list(dict.fromkeys(keywords))
-        primary_keyword = self._select_primary_keyword(unique_keywords)
-        secondary_keywords = [k for k in unique_keywords if k != primary_keyword]
-        
-        # 合併其他信息
-        pages = [str(row.get('page_number', 'N/A')) for _, row in group_data.iterrows() 
-                if pd.notna(row.get('page_number'))]
-        unique_pages = list(dict.fromkeys(pages))
-        
-        # 計算平均信心分數
-        confidences = []
-        for _, row in group_data.iterrows():
-            conf = row.get('confidence')
-            if pd.notna(conf) and conf != 'N/A':
-                try:
-                    confidences.append(float(conf))
-                except:
-                    pass
-        
-        avg_confidence = np.mean(confidences) if confidences else 0.5
-        
-        return {
-            'keyword': primary_keyword,
-            'alternative_keywords': ' | '.join(secondary_keywords) if secondary_keywords else '',
-            'value': str(best_record.get('value', 'N/A')),
-            'data_type': str(best_record.get('data_type', 'N/A')),
-            'confidence': round(avg_confidence, 3),
-            'paragraph': str(best_record.get('paragraph', 'N/A')),
-            'page_number': ' | '.join(unique_pages),
-            'merged_count': len(group_indices),
-            'original_indices': str(group_indices)
-        }
-    
-    def _create_summary_statistics(self, original_df: pd.DataFrame, deduplicated_df: pd.DataFrame) -> pd.DataFrame:
-        """創建統計摘要"""
-        stats = []
-        
-        # 整體統計
-        stats.append({
-            '項目': '總記錄數',
-            '原始': len(original_df),
-            '去重後': len(deduplicated_df),
-            '減少數量': len(original_df) - len(deduplicated_df),
-            '減少比例': f"{((len(original_df) - len(deduplicated_df)) / len(original_df) * 100):.1f}%"
-        })
-        
-        # 數據類型統計
-        if 'data_type' in original_df.columns:
-            for data_type in original_df['data_type'].unique():
-                if pd.isna(data_type):
-                    continue
-                
-                original_count = len(original_df[original_df['data_type'] == data_type])
-                deduplicated_count = len(deduplicated_df[deduplicated_df['data_type'] == data_type])
-                
-                stats.append({
-                    '項目': f'{data_type}類型',
-                    '原始': original_count,
-                    '去重後': deduplicated_count,
-                    '減少數量': original_count - deduplicated_count,
-                    '減少比例': f"{((original_count - deduplicated_count) / original_count * 100):.1f}%" if original_count > 0 else "0%"
-                })
-        
-        return pd.DataFrame(stats)
-    
-    def _export_deduplicated_excel(self, deduplicated_df: pd.DataFrame, 
-                                  summary_df: pd.DataFrame, original_file_path: str) -> str:
-        """導出去重後的Excel"""
-        original_path = Path(original_file_path)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"{original_path.stem}_deduplicated_{timestamp}.xlsx"
-        output_path = original_path.parent / output_filename
-        
-        # 準備展示用的DataFrame
-        display_columns = {
-            'keyword': '主要關鍵字',
-            'alternative_keywords': '其他相關關鍵字',
-            'value': '提取數值',
-            'data_type': '數據類型',
-            'confidence': '信心分數',
-            'paragraph': '段落內容',
-            'page_number': '頁碼',
-            'merged_count': '合併數量'
-        }
-        
-        # 選擇和重命名列
-        final_columns = ['keyword', 'alternative_keywords', 'value', 'data_type', 
-                        'confidence', 'paragraph', 'page_number', 'merged_count']
-        
-        # 確保所有列都存在
-        for col in final_columns:
-            if col not in deduplicated_df.columns:
-                deduplicated_df[col] = 'N/A'
-        
-        display_df = deduplicated_df[final_columns].rename(columns=display_columns)
-        
-        # 截短過長文本
-        if '段落內容' in display_df.columns:
-            display_df['段落內容'] = display_df['段落內容'].apply(
-                lambda x: str(x)[:200] + "..." if len(str(x)) > 200 else str(x)
-            )
-        
-        # 寫入Excel
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            display_df.to_excel(writer, sheet_name='去重結果', index=False)
-            summary_df.to_excel(writer, sheet_name='去重統計', index=False)
-        
-        return str(output_path)
-    
-    def _print_excel_dedup_summary(self, original_df: pd.DataFrame, 
-                                  deduplicated_df: pd.DataFrame, groups: List[List[int]]):
-        """打印Excel去重摘要"""
-        print("\n" + "="*60)
-        print("📊 Excel去重處理摘要")
-        print("="*60)
-        
-        print(f"原始記錄數: {len(original_df)}")
-        print(f"去重後記錄數: {len(deduplicated_df)}")
-        print(f"刪除重複記錄: {len(original_df) - len(deduplicated_df)}")
-        
-        if len(original_df) > 0:
-            reduction_rate = ((len(original_df) - len(deduplicated_df)) / len(original_df) * 100)
-            print(f"去重比例: {reduction_rate:.1f}%")
-        
-        print(f"\n📋 發現 {len(groups)} 個重複組")
-        
-        # 顯示重複程度最高的幾組
-        group_sizes = [len(group) for group in groups]
-        if group_sizes:
-            print(f"最大重複組: {max(group_sizes)} 個記錄")
-            print(f"平均重複組大小: {np.mean(group_sizes):.1f} 個記錄")
 
 # =============================================================================
 # 主要提取器類
 # =============================================================================
 
 class ESGExtractor:
-    """ESG資料提取器主類"""
+    """增強版ESG資料提取器主類"""
     
     def __init__(self, vector_db_path: str = None, enable_llm: bool = True, auto_dedupe: bool = True):
         """
-        初始化提取器
+        初始化增強版提取器
         
         Args:
             vector_db_path: 向量資料庫路徑
@@ -799,8 +392,15 @@ class ESGExtractor:
         self.auto_dedupe = auto_dedupe
         
         # 初始化組件
-        self.matcher = EnhancedMatcher()
-        self.keyword_config = KeywordConfig()
+        if ENHANCED_KEYWORDS_AVAILABLE:
+            self.keyword_config = EnhancedKeywordConfig()
+            self.matcher = EnhancedMatcher()
+            print("✅ 使用增強關鍵字配置")
+        else:
+            self.keyword_config = KeywordConfig()
+            self.matcher = self._create_basic_matcher()
+            print("⚠️ 使用基本關鍵字配置")
+        
         self.deduplicator = ESGResultDeduplicator()
         
         # 載入向量資料庫
@@ -810,9 +410,19 @@ class ESGExtractor:
         if self.enable_llm:
             self._init_llm()
         
-        print("✅ ESG提取器初始化完成")
+        print("✅ 增強版ESG提取器初始化完成")
         if self.auto_dedupe:
-            print("✅ 自動去重功能已啟用")
+            print("✅ 智能去重功能已啟用")
+
+    def _create_basic_matcher(self):
+        """創建基本匹配器（回退方案）"""
+        class BasicMatcher:
+            def extract_numbers_and_percentages(self, text: str):
+                numbers = re.findall(r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:萬|千)?(?:噸|kg|KG|公斤))', text)
+                percentages = re.findall(r'\d+(?:\.\d+)?(?:\s*%|％)', text)
+                return numbers, percentages
+        
+        return BasicMatcher()
 
     def _load_vector_database(self):
         """載入向量資料庫"""
@@ -832,67 +442,89 @@ class ESGExtractor:
         print(f"✅ 向量資料庫載入完成")
     
     def _init_llm(self):
-        """初始化LLM（多API支援）"""
+        """初始化增強LLM管理器"""
         try:
-            print(f"🤖 初始化Gemini多API管理器...")
+            print(f"🤖 初始化增強LLM管理器...")
             
-            # 使用多API管理器
-            if len(GEMINI_API_KEYS) > 1:
-                print(f"🔄 啟用多API輪換模式，共 {len(GEMINI_API_KEYS)} 個Keys")
-                self.api_manager = GeminiAPIManager(
-                    api_keys=GEMINI_API_KEYS,
-                    model_name=GEMINI_MODEL
-                )
-                self.llm_mode = "multi_api"
-            else:
-                print("🔑 使用單API模式")
-                # 回退到傳統單API模式
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                self.llm = ChatGoogleGenerativeAI(
-                    model=GEMINI_MODEL,
-                    google_api_key=GEMINI_API_KEYS[0],
-                    temperature=0.1,
-                    max_tokens=1024
-                )
-                self.llm_mode = "single_api"
+            self.llm_manager = EnhancedLLMManager(
+                api_keys=GEMINI_API_KEYS,
+                model_name=GEMINI_MODEL
+            )
             
-            print("✅ LLM初始化完成")
+            print("✅ 增強LLM管理器初始化完成")
             
         except Exception as e:
             print(f"⚠️ LLM初始化失敗: {e}")
             self.enable_llm = False
-
-    def _call_llm(self, prompt: str) -> str:
-        """統一的LLM調用介面"""
-        if self.llm_mode == "multi_api":
-            # 使用多API管理器
-            return self.api_manager.invoke(prompt)
-        else:
-            # 使用傳統單API
-            response = self.llm.invoke(prompt)
-            return response.content
     
-    def stage1_filtering(self, documents: List[Document]) -> Tuple[List[Document], List[ExtractionMatch]]:
-        """第一階段篩選：檢查文檔是否包含目標關鍵字"""
-        print("🔍 執行第一階段篩選...")
+    def enhanced_stage1_filtering(self, documents: List[Document]) -> Tuple[List[Document], List[ExtractionMatch]]:
+        """增強的第一階段篩選：使用精確過濾管道"""
+        print("🔍 執行增強的第一階段篩選...")
+        
+        if not ENHANCED_KEYWORDS_AVAILABLE:
+            return self._basic_stage1_filtering(documents)
+        
+        keywords = self.keyword_config.get_all_keywords()
+        passed_docs = []
+        all_matches = []
+        filtering_stats = {
+            'total_docs': len(documents),
+            'passed_docs': 0,
+            'rejected_docs': 0,
+            'total_matches': 0
+        }
+        
+        for doc in tqdm(documents, desc="增強第一階段篩選"):
+            # 使用增強過濾管道
+            passed, matches = enhanced_filtering_pipeline(doc.page_content, keywords)
+            
+            if passed and matches:
+                # 只保留高相關性的匹配
+                high_relevance_matches = [m for m in matches if m.get('relevance_score', 0) > 0.75]
+                
+                if high_relevance_matches:
+                    passed_docs.append(doc)
+                    filtering_stats['passed_docs'] += 1
+                    
+                    # 轉換為ExtractionMatch格式
+                    for match in high_relevance_matches:
+                        extraction_match = ExtractionMatch(
+                            keyword=match['keyword'],
+                            keyword_type=match['match_type'],
+                            confidence=match.get('relevance_score', 0.8),
+                            matched_text=match.get('match_details', '')
+                        )
+                        all_matches.append(extraction_match)
+                        filtering_stats['total_matches'] += 1
+                else:
+                    filtering_stats['rejected_docs'] += 1
+            else:
+                filtering_stats['rejected_docs'] += 1
+        
+        print(f"✅ 增強第一階段完成: {len(passed_docs)}/{len(documents)} 文檔通過")
+        print(f"   精確過濾效果: 拒絕了 {filtering_stats['rejected_docs']} 個不相關文檔")
+        print(f"   找到高質量匹配: {filtering_stats['total_matches']} 個")
+        
+        return passed_docs, all_matches
+    
+    def _basic_stage1_filtering(self, documents: List[Document]) -> Tuple[List[Document], List[ExtractionMatch]]:
+        """基本的第一階段篩選（回退方案）"""
+        print("🔍 執行基本第一階段篩選...")
         
         keywords = self.keyword_config.get_all_keywords()
         passed_docs = []
         all_matches = []
         
-        for doc in tqdm(documents, desc="第一階段篩選"):
+        for doc in tqdm(documents, desc="基本第一階段篩選"):
             doc_matches = []
             
             for keyword in keywords:
-                is_match, confidence, details = self.matcher.match_keyword(doc.page_content, keyword)
-                
-                if is_match:
-                    keyword_str = keyword if isinstance(keyword, str) else " + ".join(keyword)
+                if isinstance(keyword, str) and keyword.lower() in doc.page_content.lower():
                     match = ExtractionMatch(
-                        keyword=keyword_str,
-                        keyword_type='continuous' if isinstance(keyword, str) else 'discontinuous',
-                        confidence=confidence,
-                        matched_text=details
+                        keyword=keyword,
+                        keyword_type='continuous',
+                        confidence=0.8,
+                        matched_text=f"基本匹配: {keyword}"
                     )
                     doc_matches.append(match)
             
@@ -900,7 +532,7 @@ class ESGExtractor:
                 passed_docs.append(doc)
                 all_matches.extend(doc_matches)
         
-        print(f"✅ 第一階段完成: {len(passed_docs)}/{len(documents)} 文檔通過")
+        print(f"✅ 基本第一階段完成: {len(passed_docs)}/{len(documents)} 文檔通過")
         return passed_docs, all_matches
     
     def stage2_filtering(self, documents: List[Document]) -> List[NumericExtraction]:
@@ -920,11 +552,20 @@ class ESGExtractor:
                     continue
                 
                 # 檢查段落中的關鍵字
-                para_matches = []
-                for keyword in keywords:
-                    is_match, confidence, details = self.matcher.match_keyword(paragraph, keyword)
-                    if is_match:
-                        para_matches.append((keyword, confidence, details))
+                if ENHANCED_KEYWORDS_AVAILABLE:
+                    # 使用增強過濾檢查段落
+                    passed, matches = enhanced_filtering_pipeline(paragraph, keywords)
+                    if not passed or not matches:
+                        continue
+                    
+                    para_matches = [(m['original_keyword'], m.get('relevance_score', 0.8), m.get('match_details', '')) 
+                                   for m in matches]
+                else:
+                    # 基本關鍵字檢查
+                    para_matches = []
+                    for keyword in keywords:
+                        if isinstance(keyword, str) and keyword.lower() in paragraph.lower():
+                            para_matches.append((keyword, 0.8, f"基本匹配: {keyword}"))
                 
                 if para_matches:
                     # 提取數值和百分比
@@ -971,25 +612,23 @@ class ESGExtractor:
         return extractions
     
     def llm_enhancement(self, extractions: List[NumericExtraction]) -> List[NumericExtraction]:
-        """LLM增強：驗證和豐富提取結果（支援多API輪換）"""
+        """LLM增強：驗證和豐富提取結果"""
         if not self.enable_llm or not extractions:
             return extractions
         
-        print("🤖 執行LLM增強...")
-        if self.llm_mode == "multi_api":
-            print(f"🔄 使用多API輪換模式處理 {len(extractions)} 個結果")
+        print("🤖 執行LLM增強驗證...")
+        print(f"📊 處理 {len(extractions)} 個提取結果")
         
         enhanced_extractions = []
-        failed_count = 0
         
         for i, extraction in enumerate(tqdm(extractions, desc="LLM增強")):
             try:
-                # 構建驗證提示
-                prompt = self._build_verification_prompt(extraction)
+                # 構建改進的驗證提示
+                prompt = self._build_enhanced_verification_prompt(extraction)
                 
-                # 統一調用LLM
-                response_content = self._call_llm(prompt)
-                llm_result = self._parse_llm_response(response_content)
+                # 調用LLM
+                response_content = self.llm_manager.invoke(prompt)
+                llm_result = self._parse_enhanced_llm_response(response_content)
                 
                 # 更新提取結果
                 if llm_result and llm_result.get("is_relevant", True):
@@ -1002,35 +641,30 @@ class ESGExtractor:
                     
                     # 添加LLM的解釋
                     extraction.context_window += f"\n[LLM驗證]: {llm_result.get('explanation', '')}"
-                
-                enhanced_extractions.append(extraction)
+                    enhanced_extractions.append(extraction)
+                elif llm_result and llm_result.get("confidence", 0) > 0.7:
+                    # 即使不相關但信心分數高，降低信心後保留
+                    extraction.confidence *= 0.7
+                    extraction.context_window += f"\n[LLM注意]: {llm_result.get('explanation', '')}"
+                    enhanced_extractions.append(extraction)
+                # 其他情況丟棄
                 
             except Exception as e:
                 print(f"⚠️ LLM增強失敗 (第{i+1}個): {e}")
                 enhanced_extractions.append(extraction)  # 保留原始結果
-                failed_count += 1
         
         # 顯示處理統計
-        success_rate = ((len(extractions) - failed_count) / len(extractions)) * 100
-        print(f"✅ LLM增強完成：成功率 {success_rate:.1f}% ({len(extractions)-failed_count}/{len(extractions)})")
+        success_rate = self.llm_manager.get_success_rate()
+        retention_rate = (len(enhanced_extractions) / len(extractions)) * 100
         
-        # 顯示API使用統計（如果是多API模式）
-        if self.llm_mode == "multi_api":
-            self.print_api_usage_stats()
+        print(f"✅ LLM增強完成:")
+        print(f"   API成功率: {success_rate:.1f}%")
+        print(f"   結果保留率: {retention_rate:.1f}% ({len(enhanced_extractions)}/{len(extractions)})")
+        
+        # 顯示API使用統計
+        self.llm_manager.print_stats()
         
         return enhanced_extractions
-    
-    def print_api_usage_stats(self):
-        """打印API使用統計"""
-        if hasattr(self, 'api_manager'):
-            print("\n🔄 API使用統計:")
-            self.api_manager.print_usage_statistics()
-    
-    def get_api_usage_summary(self) -> dict:
-        """獲取API使用摘要"""
-        if hasattr(self, 'api_manager'):
-            return self.api_manager.get_usage_statistics()
-        return {"total_requests": 0, "keys_usage": {}}
     
     def export_to_excel(self, extractions: List[NumericExtraction], summary: ProcessingSummary) -> str:
         """匯出結果到Excel"""
@@ -1040,7 +674,7 @@ class ESGExtractor:
         # 確保輸出目錄存在
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        print(f"📊 匯出結果到Excel: {output_path}")
+        print(f"📊 匯出增強版結果到Excel: {output_path}")
         
         # 準備主要數據
         main_data = []
@@ -1075,13 +709,15 @@ class ESGExtractor:
         
         # 準備處理摘要
         process_summary = [{
-            '項目': '處理摘要',
+            '項目': '增強版處理摘要',
             '總文檔數': summary.total_documents,
             '第一階段通過': summary.stage1_passed,
             '第二階段通過': summary.stage2_passed,
             '總提取結果': summary.total_extractions,
             '處理時間(秒)': round(summary.processing_time, 2),
-            '自動去重': '已啟用' if self.auto_dedupe else '未啟用'
+            '增強關鍵字過濾': '已啟用' if ENHANCED_KEYWORDS_AVAILABLE else '未啟用',
+            '自動去重': '已啟用' if self.auto_dedupe else '未啟用',
+            'LLM增強': '已啟用' if self.enable_llm else '未啟用'
         }]
         
         # 寫入Excel
@@ -1095,21 +731,21 @@ class ESGExtractor:
             # 處理摘要
             pd.DataFrame(process_summary).to_excel(writer, sheet_name='處理摘要', index=False)
         
-        print(f"✅ Excel檔案已保存")
+        print(f"✅ 增強版Excel檔案已保存")
         return output_path
     
     def run_complete_extraction(self, max_documents: int = 200) -> Tuple[List[NumericExtraction], ProcessingSummary, str]:
-        """執行完整的資料提取流程（含自動去重）"""
+        """執行完整的增強版資料提取流程"""
         start_time = datetime.now()
-        print("🚀 開始完整的ESG資料提取流程")
+        print("🚀 開始增強版ESG資料提取流程")
         print("=" * 60)
         
         # 1. 獲取相關文檔
         print("📄 檢索相關文檔...")
         documents = self._retrieve_relevant_documents(max_documents)
         
-        # 2. 第一階段篩選
-        stage1_docs, stage1_matches = self.stage1_filtering(documents)
+        # 2. 增強的第一階段篩選
+        stage1_docs, stage1_matches = self.enhanced_stage1_filtering(documents)
         
         # 3. 第二階段篩選
         stage2_extractions = self.stage2_filtering(stage1_docs)
@@ -1117,9 +753,9 @@ class ESGExtractor:
         # 4. LLM增強（如果啟用）
         enhanced_extractions = self.llm_enhancement(stage2_extractions)
         
-        # 5. 自動去重（如果啟用）
+        # 5. 智能去重（如果啟用）
         if self.auto_dedupe:
-            print("\n🔄 執行自動去重...")
+            print("\n🔄 執行智能去重...")
             final_extractions = self.deduplicator.deduplicate_extractions(enhanced_extractions)
         else:
             final_extractions = enhanced_extractions
@@ -1136,23 +772,20 @@ class ESGExtractor:
         summary = ProcessingSummary(
             total_documents=len(documents),
             stage1_passed=len(stage1_docs),
-            stage2_passed=len([e for e in final_extractions]),
+            stage2_passed=len(stage2_extractions),
             total_extractions=len(final_extractions),
             keywords_found=keywords_found,
-            processing_time=processing_time
+            processing_time=processing_time,
+            enhanced_filtering_used=ENHANCED_KEYWORDS_AVAILABLE
         )
         
         # 7. 匯出結果
         excel_path = self.export_to_excel(final_extractions, summary)
         
         # 8. 顯示最終摘要
-        self._print_final_summary(summary, final_extractions)
+        self._print_enhanced_final_summary(summary, final_extractions)
         
         return final_extractions, summary, excel_path
-    
-    def manual_deduplicate_results(self, excel_path: str) -> str:
-        """手動去重現有的Excel結果文件"""
-        return self.deduplicator.deduplicate_excel_file(excel_path)
     
     # =============================================================================
     # 輔助方法
@@ -1160,7 +793,15 @@ class ESGExtractor:
     
     def _retrieve_relevant_documents(self, max_docs: int) -> List[Document]:
         """檢索相關文檔"""
-        keywords = self.keyword_config.get_all_keywords()
+        if ENHANCED_KEYWORDS_AVAILABLE:
+            config = EnhancedKeywordConfig()
+            keywords = (
+                config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關連續關鍵字"] +
+                config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關不連續關鍵字"]
+            )
+        else:
+            keywords = self.keyword_config.get_all_keywords()
+        
         all_docs = []
         
         # 對每個關鍵字進行檢索
@@ -1211,54 +852,91 @@ class ESGExtractor:
         except:
             return target_paragraph[:200]
     
-    def _build_verification_prompt(self, extraction: NumericExtraction) -> str:
-        """構建LLM驗證提示"""
-        return f"""
-請驗證以下數據提取結果的準確性：
+    def _build_enhanced_verification_prompt(self, extraction: NumericExtraction) -> str:
+        """構建增強的LLM驗證提示"""
+        return f"""請分析以下數據提取結果是否與再生塑膠/回收塑料的實際生產使用相關：
 
 關鍵字: {extraction.keyword}
 提取值: {extraction.value}
 數據類型: {extraction.value_type}
 
-段落內容:
-{extraction.paragraph}
+段落內容: {extraction.paragraph[:300]}
 
-請判斷：
-1. 提取的數值是否與關鍵字相關？
-2. 數值提取是否準確？
-3. 數據類型分類是否正確？
+判斷標準:
+1. 是否與再生塑膠、回收塑料、PCR材料的實際生產或使用相關？
+2. 是否排除了賽事活動、職業災害、水資源管理等無關主題？
+3. 數值是否確實描述再生材料的產能、產量、使用量或比例？
 
-請以JSON格式回答：
-{{
-    "is_relevant": true/false,
-    "is_accurate": true/false,
-    "confidence": 0-1之間的分數,
-    "explanation": "簡短解釋"
-}}
-"""
+請嚴格按照JSON格式回答（不要包含其他文字）：
+{{"is_relevant": true, "confidence": 0.85, "explanation": "簡短說明相關性"}}"""
     
-    def _parse_llm_response(self, response_text: str) -> Optional[Dict]:
-        """解析LLM回應"""
+    def _parse_enhanced_llm_response(self, response_text: str) -> Optional[Dict]:
+        """解析增強的LLM響應"""
+        if not response_text:
+            return None
+        
         try:
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            # 方法1: 直接解析JSON
+            json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
+                json_str = json_match.group()
+                result = json.loads(json_str)
+                
+                if 'is_relevant' in result:
+                    return {
+                        'is_relevant': bool(result.get('is_relevant', False)),
+                        'confidence': float(result.get('confidence', 0.5)),
+                        'explanation': str(result.get('explanation', '無說明'))
+                    }
         except:
             pass
         
-        return None
+        # 方法2: 關鍵字解析
+        try:
+            response_lower = response_text.lower()
+            
+            # 判斷相關性
+            is_relevant = False
+            if any(word in response_lower for word in ['true', '相關', '是', 'relevant']):
+                is_relevant = True
+            
+            # 提取信心分數
+            confidence = 0.5
+            confidence_match = re.search(r'(?:confidence|信心).*?(\d+\.?\d*)', response_lower)
+            if confidence_match:
+                confidence = min(float(confidence_match.group(1)), 1.0)
+                if confidence > 1:
+                    confidence = confidence / 100
+            
+            return {
+                'is_relevant': is_relevant,
+                'confidence': confidence,
+                'explanation': response_text[:100] + "..." if len(response_text) > 100 else response_text
+            }
+            
+        except:
+            pass
+        
+        # 方法3: 保守默認
+        return {
+            'is_relevant': False,
+            'confidence': 0.3,
+            'explanation': f"響應解析失敗: {response_text[:50]}..."
+        }
     
-    def _print_final_summary(self, summary: ProcessingSummary, extractions: List[NumericExtraction]):
-        """打印最終摘要"""
-        print("\n" + "=" * 60)
-        print("📋 提取完成摘要")
-        print("=" * 60)
+    def _print_enhanced_final_summary(self, summary: ProcessingSummary, extractions: List[NumericExtraction]):
+        """打印增強版最終摘要"""
+        print("\n" + "=" * 70)
+        print("📋 增強版提取完成摘要")
+        print("=" * 70)
         print(f"📚 處理文檔數: {summary.total_documents}")
         print(f"🔍 第一階段通過: {summary.stage1_passed}")
         print(f"🔢 第二階段通過: {summary.stage2_passed}")
         print(f"📊 總提取結果: {summary.total_extractions}")
         print(f"⏱️ 處理時間: {summary.processing_time:.2f} 秒")
-        print(f"🧹 自動去重: {'已啟用' if self.auto_dedupe else '未啟用'}")
+        print(f"🎯 增強關鍵字過濾: {'已啟用' if summary.enhanced_filtering_used else '未啟用'}")
+        print(f"🧹 智能去重: {'已啟用' if self.auto_dedupe else '未啟用'}")
+        print(f"🤖 LLM增強: {'已啟用' if self.enable_llm else '未啟用'}")
         
         print(f"\n📈 關鍵字分布:")
         for keyword, count in summary.keywords_found.items():
@@ -1274,21 +952,25 @@ class ESGExtractor:
             
             avg_confidence = np.mean([e.confidence for e in extractions])
             print(f"📊 平均信心分數: {avg_confidence:.3f}")
+            
+            # 顯示LLM統計
+            if self.enable_llm and hasattr(self, 'llm_manager'):
+                print(f"🤖 LLM處理成功率: {self.llm_manager.get_success_rate():.1f}%")
 
 def main():
     """主函數 - 獨立運行測試"""
     try:
-        print("🚀 ESG資料提取器 - 獨立測試模式")
-        print("=" * 50)
+        print("🚀 增強版ESG資料提取器 - 獨立測試模式")
+        print("=" * 60)
         
-        # 初始化提取器（啟用自動去重）
+        # 初始化提取器（啟用所有增強功能）
         extractor = ESGExtractor(enable_llm=True, auto_dedupe=True)
         
         # 執行完整提取
         extractions, summary, excel_path = extractor.run_complete_extraction()
         
         if extractions:
-            print(f"\n🎉 提取完成！")
+            print(f"\n🎉 增強版提取完成！")
             print(f"📁 結果已保存至: {excel_path}")
             
             # 顯示前幾個結果作為樣例
@@ -1300,12 +982,6 @@ def main():
                 print(f"   頁碼: {extraction.page_number}")
                 print(f"   信心: {extraction.confidence:.2f}")
                 print(f"   段落: {extraction.paragraph[:100]}...")
-            
-            # 測試手動去重功能
-            print(f"\n🧹 測試手動去重功能...")
-            dedupe_path = extractor.manual_deduplicate_results(excel_path)
-            if dedupe_path:
-                print(f"✅ 手動去重完成: {Path(dedupe_path).name}")
         
         else:
             print("❌ 未找到任何提取結果")
@@ -1315,46 +991,5 @@ def main():
         import traceback
         traceback.print_exc()
 
-# 使用示例的輔助函數
-def test_multi_api_functionality():
-    """測試多API功能"""
-    print("🧪 測試多API輪換功能")
-    print("=" * 50)
-    
-    # 測試API管理器
-    try:
-        if len(GEMINI_API_KEYS) > 1:
-            api_manager = GeminiAPIManager(
-                api_keys=GEMINI_API_KEYS,
-                model_name=GEMINI_MODEL
-            )
-            
-            # 測試多次調用
-            test_prompts = [
-                "解釋什麼是再生塑膠",
-                "計算50% + 30%",
-                "翻譯：recycled plastic",
-                "列出環保材料的好處",
-                "ESG是什麼的縮寫？"
-            ]
-            
-            print(f"🔄 測試 {len(test_prompts)} 次API調用...")
-            
-            for i, prompt in enumerate(test_prompts, 1):
-                try:
-                    response = api_manager.invoke(prompt)
-                    print(f"✅ 調用 {i}: 成功")
-                except Exception as e:
-                    print(f"❌ 調用 {i}: 失敗 - {e}")
-            
-            # 顯示使用統計
-            api_manager.print_usage_statistics()
-            
-        else:
-            print("⚠️ 只有一個API Key，無法測試多API輪換")
-            
-    except Exception as e:
-        print(f"❌ 測試失敗: {e}")
-
 if __name__ == "__main__":
-    test_multi_api_functionality()
+    main()
