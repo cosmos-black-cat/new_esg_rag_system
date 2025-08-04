@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ESG資料提取系統 - 主程式 v2.1
-整合增強關鍵字過濾，專注於再生塑膠相關關鍵字的智能提取和去重
+專注於再生塑膠相關關鍵字的智能提取和去重，支援強排除模式
 """
 
 import os
@@ -22,8 +22,7 @@ try:
     from config import (
         GOOGLE_API_KEY, GEMINI_MODEL, EMBEDDING_MODEL,
         VECTOR_DB_PATH, DATA_PATH, RESULTS_PATH, 
-        CHUNK_SIZE, SEARCH_K, CONFIDENCE_THRESHOLD,
-        GEMINI_API_KEYS
+        CHUNK_SIZE, SEARCH_K, CONFIDENCE_THRESHOLD
     )
     CONFIG_LOADED = True
 except ImportError as e:
@@ -111,13 +110,13 @@ def check_environment():
         return False
     
     # 檢查API Key
-    if not GEMINI_API_KEYS:
+    if not GOOGLE_API_KEY:
         print("❌ Google API Key未設置")
-        print("   請在 src/.env 文件中設置 GOOGLE_API_KEY 或 GEMINI_API_KEYS")
+        print("   請在 src/.env 文件中設置 GOOGLE_API_KEY")
         print("   獲取方式: https://makersuite.google.com/app/apikey")
         return False
     
-    print(f"✅ API Keys: {len(GEMINI_API_KEYS)} 個")
+    print(f"✅ Google API Key: {GOOGLE_API_KEY[:10]}...")
     print(f"✅ Gemini模型: {GEMINI_MODEL}")
     print(f"✅ Embedding模型: {EMBEDDING_MODEL}")
     
@@ -195,28 +194,6 @@ def check_vector_database() -> bool:
         print(f"❌ 檢查向量資料庫失敗: {e}")
         return False
 
-def check_enhanced_keywords():
-    """檢查增強關鍵字配置"""
-    try:
-        from keywords_config import enhanced_filtering_pipeline, EnhancedKeywordConfig
-        print("✅ 增強關鍵字配置已載入")
-        
-        # 測試配置
-        config = EnhancedKeywordConfig()
-        total_keywords = (
-            len(config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關連續關鍵字"]) +
-            len(config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關不連續關鍵字"])
-        )
-        print(f"✅ 關鍵字總數: {total_keywords}")
-        
-        return True
-    except ImportError as e:
-        print(f"❌ 增強關鍵字配置載入失敗: {e}")
-        return False
-    except Exception as e:
-        print(f"⚠️ 關鍵字配置檢查異常: {e}")
-        return False
-
 # =============================================================================
 # 核心功能函數
 # =============================================================================
@@ -265,17 +242,23 @@ def run_preprocessing(force: bool = False) -> bool:
         traceback.print_exc()
         return False
 
-def run_extraction(enable_llm: bool = True, max_docs: int = 200, enable_dedupe: bool = True) -> Optional[Tuple]:
-    """執行資料提取"""
+def run_extraction(enable_llm: bool = True, max_docs: int = 200, enable_dedupe: bool = True, 
+                  enable_strict_exclusion: bool = True) -> Optional[Tuple]:
+    """執行資料提取（預設啟用強排除模式）"""
     try:
         from esg_extractor import ESGExtractor
         
-        print("🚀 初始化增強版ESG資料提取器...")
-        print("   • 增強關鍵字過濾")
-        print("   • 精確相關性檢查")
-        print("   • 智能去重功能")
+        print("🚀 初始化ESG資料提取器...")
+        print(f"📋 配置參數:")
+        print(f"   LLM增強: {'✅ 已啟用' if enable_llm else '❌ 未啟用'}")
+        print(f"   自動去重: {'✅ 已啟用' if enable_dedupe else '❌ 未啟用'}")
+        print(f"   強排除模式: {'🔒 已啟用' if enable_strict_exclusion else '❌ 未啟用'}")
         
-        extractor = ESGExtractor(enable_llm=enable_llm, auto_dedupe=enable_dedupe)
+        extractor = ESGExtractor(
+            enable_llm=enable_llm, 
+            auto_dedupe=enable_dedupe,
+            enable_strict_exclusion=enable_strict_exclusion
+        )
         
         print("🔍 開始資料提取...")
         extractions, summary, excel_path = extractor.run_complete_extraction(max_docs)
@@ -338,12 +321,11 @@ def show_system_info():
         return
     
     try:
-        from keywords_config import EnhancedKeywordConfig
+        from esg_extractor import KeywordConfig, StrictExclusionConfig
         
-        print("📋 增強版系統配置信息")
+        print("📋 系統配置信息")
         print("=" * 50)
         print(f"🤖 Gemini模型: {GEMINI_MODEL}")
-        print(f"🔑 API Keys: {len(GEMINI_API_KEYS)} 個")
         print(f"🧠 Embedding模型: {EMBEDDING_MODEL}")
         print(f"📚 向量資料庫: {VECTOR_DB_PATH}")
         print(f"📁 數據目錄: {DATA_PATH}")
@@ -352,32 +334,38 @@ def show_system_info():
         print(f"🔍 搜索數量: {SEARCH_K}")
         print(f"📈 信心閾值: {CONFIDENCE_THRESHOLD}")
         
-        print(f"\n🎯 增強關鍵字配置")
+        print(f"\n🎯 關鍵字配置")
         print("=" * 50)
+        keywords = KeywordConfig.get_all_keywords()
+        continuous = [k for k in keywords if isinstance(k, str)]
+        discontinuous = [k for k in keywords if isinstance(k, tuple)]
         
-        config = EnhancedKeywordConfig()
-        continuous = config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關連續關鍵字"]
-        discontinuous = config.CORE_RECYCLED_PLASTIC_KEYWORDS["高相關不連續關鍵字"]
-        
-        print(f"總關鍵字數: {len(continuous) + len(discontinuous)}")
+        print(f"總關鍵字數: {len(keywords)}")
         print(f"連續關鍵字: {len(continuous)}")
         print(f"不連續關鍵字: {len(discontinuous)}")
         
-        print(f"\n🔑 連續關鍵字:")
+        print(f"\n連續關鍵字:")
         for keyword in continuous:
             print(f"   • {keyword}")
         
-        print(f"\n🔗 不連續關鍵字:")
+        print(f"\n不連續關鍵字:")
         for keyword in discontinuous:
             print(f"   • {' + '.join(keyword)}")
         
-        print(f"\n🚫 排除功能:")
-        if hasattr(config, 'STRONG_EXCLUSIONS'):
-            exclusions = config.STRONG_EXCLUSIONS["完全排除的關鍵短語"]
-            print(f"   排除短語: {len(exclusions)} 個")
-            print(f"   排除模式: {len(config.STRONG_EXCLUSIONS.get('數值排除模式', []))} 個")
+        print(f"\n🔒 強排除模式配置")
+        print("=" * 50)
+        exclusion_config = StrictExclusionConfig()
+        print(f"排除關鍵字數量: {len(exclusion_config.EXCLUSION_KEYWORDS)}")
+        print(f"確認關鍵字數量: {len(exclusion_config.CONFIRMATION_KEYWORDS)}")
+        print(f"數值範圍: {exclusion_config.MIN_NUMERIC_VALUE} - {exclusion_config.MAX_NUMERIC_VALUE}")
+        print(f"百分比範圍: {exclusion_config.MIN_PERCENTAGE_VALUE}% - {exclusion_config.MAX_PERCENTAGE_VALUE}%")
+        print(f"段落長度範圍: {exclusion_config.MIN_PARAGRAPH_LENGTH} - {exclusion_config.MAX_PARAGRAPH_LENGTH} 字符")
         
-        print(f"\n✅ 增強過濾功能已啟用")
+        print(f"\n部分排除關鍵字:")
+        for i, keyword in enumerate(exclusion_config.EXCLUSION_KEYWORDS[:10]):
+            print(f"   • {keyword}")
+        if len(exclusion_config.EXCLUSION_KEYWORDS) > 10:
+            print(f"   ... 還有 {len(exclusion_config.EXCLUSION_KEYWORDS) - 10} 個")
             
     except Exception as e:
         print(f"❌ 顯示系統信息失敗: {e}")
@@ -460,6 +448,18 @@ def show_latest_results():
                 print(f"   最高: {max_confidence:.3f}")
                 print(f"   最低: {min_confidence:.3f}")
             
+            # 嘗試讀取處理摘要工作表
+            try:
+                summary_df = pd.read_excel(latest_file, sheet_name='處理摘要')
+                if not summary_df.empty:
+                    print(f"\n📋 處理摘要:")
+                    for _, row in summary_df.iterrows():
+                        for col, val in row.items():
+                            if pd.notna(val) and col != '項目':
+                                print(f"   {col}: {val}")
+            except:
+                pass
+            
             # 顯示樣例數據
             print(f"\n📋 樣例數據 (前3筆):")
             for i, (_, row) in enumerate(df_results.head(3).iterrows(), 1):
@@ -479,14 +479,13 @@ def show_latest_results():
 
 def test_system():
     """測試系統功能"""
-    print("🧪 增強版系統功能測試")
+    print("🧪 系統功能測試")
     print("=" * 50)
     
     tests = [
         ("Python版本", check_python_version),
         ("依賴包", check_dependencies),
         ("配置文件", lambda: CONFIG_LOADED),
-        ("增強關鍵字", check_enhanced_keywords),
         ("PDF文件", lambda: check_pdf_files()[0]),
         ("向量資料庫", check_vector_database),
     ]
@@ -508,7 +507,7 @@ def test_system():
     print(f"\n📊 測試結果: {passed}/{total} 通過")
     
     if passed == total:
-        print("🎉 所有測試通過！增強版系統可以正常運行")
+        print("🎉 所有測試通過！系統可以正常運行")
         return True
     else:
         print("⚠️  部分測試失敗，請檢查相關配置")
@@ -619,32 +618,30 @@ def deduplicate_existing_files():
 
 def show_usage_guide():
     """顯示使用說明"""
-    print("\n💡 增強版使用說明")
+    print("\n💡 使用說明")
     print("=" * 60)
     print("""
 📚 系統功能：
-   專門提取ESG報告書中再生塑膠相關的數據，具備增強過濾功能
+   專門提取ESG報告書中再生塑膠相關的數據
    
 🎯 支援的關鍵字：
    • 再生塑膠、再生塑料、再生料、再生pp
    • PP回收、塑膠回收、PCR材料等不連續組合
    
-🚫 智能排除：
-   • 賽事活動（馬拉松、運動賽事）
-   • 職業災害統計
-   • 水資源管理（雨水回收）
-   • 改善案項目數量
-   • 技術應用覆蓋率
-   
 🔍 提取內容：
    • 包含數值的段落（如：100KG、500噸）
    • 包含百分比的段落（如：30%、八成）
-   • 必須與實際生產/使用相關
    
 📋 基本流程：
    1. 將ESG報告書PDF放入 data/ 目錄
    2. 選擇功能1執行完整提取（含自動去重）
    3. 查看生成的Excel結果文件
+   
+🔒 強排除模式（新功能）：
+   • 自動排除：計畫目標、財務數據、模糊表述
+   • 確認實際：要求包含實際生產/使用的確認詞
+   • 數值驗證：檢查數值和百分比的合理性範圍
+   • 文本長度：過濾過短或過長的段落
    
 🧹 去重功能：
    • 自動去重：提取過程中自動合併重複結果
@@ -654,12 +651,13 @@ def show_usage_guide():
 📊 輸出結果：
    • 提取結果：清理後的主要數據
    • 關鍵字統計：各關鍵字的統計信息
-   • 處理摘要：系統運行摘要
+   • 處理摘要：系統運行摘要（含強排除統計）
    
 🔧 高級功能：
    • LLM增強：使用Gemini驗證提取準確性
-   • 三段式篩選：關鍵字匹配 → 排除檢查 → 數值提取
-   • 精確過濾：自動排除不相關內容
+   • 兩段式篩選：確保結果包含有意義的數值
+   • 不連續關鍵字：支援"PP回收"等組合匹配
+   • 強排除模式：預設啟用，提高結果精確度
    
 ⚡ 快速開始：
    1. 放入PDF到data目錄 → 2. 執行python main.py --auto → 3. 查看結果
@@ -668,17 +666,17 @@ def show_usage_guide():
    • 向量資料庫損壞：選擇功能2重新預處理
    • API錯誤：檢查.env文件中的API Key
    • 結果重複：使用功能4手動去重
-   • 仍有不相關數據：檢查keywords_config.py配置
+   • 結果太少：可嘗試關閉強排除模式 --no-strict
 """)
 
 def interactive_menu():
     """互動式主選單"""
     while True:
-        print("\n" + "🔷" * 25)
-        print("🏢 ESG資料提取系統 v2.1 (增強版)")
-        print("專注於再生塑膠相關關鍵字提取 + 精確過濾 + 智能去重")
-        print("🔷" * 25)
-        print("1. 📊 執行完整資料提取 (含增強過濾)")
+        print("\n" + "🔷" * 20)
+        print("🏢 ESG資料提取系統 v2.1")
+        print("專注於再生塑膠相關關鍵字提取 + 智能去重 + 強排除模式")
+        print("🔷" * 20)
+        print("1. 📊 執行完整資料提取 (含自動去重 + 強排除模式)")
         print("2. 🔄 重新預處理PDF")
         print("3. 📋 查看最新結果")
         print("4. 🧹 去重現有Excel文件")
@@ -691,15 +689,10 @@ def interactive_menu():
         
         if choice == "1":
             # 執行完整資料提取
-            print("\n🚀 準備執行增強版資料提取...")
+            print("\n🚀 準備執行資料提取...")
             
             if not check_environment():
                 print("❌ 環境檢查失敗，無法執行提取")
-                continue
-            
-            # 檢查增強關鍵字配置
-            if not check_enhanced_keywords():
-                print("❌ 增強關鍵字配置檢查失敗")
                 continue
             
             # 檢查向量資料庫
@@ -718,17 +711,18 @@ def interactive_menu():
             auto_dedupe = input("是否啟用自動去重？(y/n，預設y): ").strip().lower()
             enable_dedupe = auto_dedupe != 'n'
             
-            max_docs_input = input("最大處理文檔數 (預設200): ").strip()
-            try:
-                max_docs = int(max_docs_input) if max_docs_input else 200
-            except ValueError:
-                max_docs = 200
+            strict_exclusion = input("是否啟用強排除模式？(y/n，預設y): ").strip().lower()
+            enable_strict_exclusion = strict_exclusion != 'n'
             
             # 執行提取
-            result = run_extraction(enable_llm=enable_llm, max_docs=max_docs, enable_dedupe=enable_dedupe)
+            result = run_extraction(
+                enable_llm=enable_llm, 
+                enable_dedupe=enable_dedupe,
+                enable_strict_exclusion=enable_strict_exclusion
+            )
             if result:
                 extractions, summary, excel_path = result
-                print(f"\n🎉 增強版提取完成！")
+                print(f"\n🎉 提取完成！")
                 print(f"📁 結果已保存: {excel_path}")
                 
                 # 詢問是否查看結果
@@ -766,7 +760,7 @@ def interactive_menu():
             
         elif choice == "8":
             # 退出
-            print("👋 感謝使用ESG資料提取系統增強版！")
+            print("👋 感謝使用ESG資料提取系統！")
             break
             
         else:
@@ -775,17 +769,19 @@ def interactive_menu():
 def command_line_mode():
     """命令行模式"""
     parser = argparse.ArgumentParser(
-        description="ESG資料提取系統增強版 - 專注於再生塑膠關鍵字 + 精確過濾",
+        description="ESG資料提取系統 v2.1 - 專注於再生塑膠關鍵字 + 強排除模式",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用範例:
-  python main.py                    # 互動模式
-  python main.py --auto             # 自動執行完整流程
-  python main.py --preprocess       # 僅預處理PDF
-  python main.py --extract          # 僅執行提取
-  python main.py --dedupe [file]    # 去重Excel文件
-  python main.py --test             # 系統測試
-  python main.py --info             # 顯示系統信息
+  python main.py                      # 互動模式
+  python main.py --auto               # 自動執行完整流程（含強排除模式）
+  python main.py --auto --no-strict   # 自動執行但關閉強排除模式
+  python main.py --preprocess         # 僅預處理PDF
+  python main.py --extract            # 僅執行提取
+  python main.py --extract --no-strict # 提取但關閉強排除模式
+  python main.py --dedupe [file]      # 去重Excel文件
+  python main.py --test               # 系統測試
+  python main.py --info               # 顯示系統信息
         """
     )
     
@@ -798,6 +794,7 @@ def command_line_mode():
     parser.add_argument("--results", action="store_true", help="查看最新結果")
     parser.add_argument("--no-llm", action="store_true", help="禁用LLM增強")
     parser.add_argument("--no-dedupe", action="store_true", help="禁用自動去重")
+    parser.add_argument("--no-strict", action="store_true", help="禁用強排除模式")
     parser.add_argument("--max-docs", type=int, default=200, help="最大處理文檔數")
     
     args = parser.parse_args()
@@ -805,11 +802,8 @@ def command_line_mode():
     # 根據參數執行對應功能
     if args.auto:
         # 自動執行完整流程
-        print("🚀 增強版自動執行模式")
+        print("🚀 自動執行模式")
         if not check_environment():
-            sys.exit(1)
-        
-        if not check_enhanced_keywords():
             sys.exit(1)
         
         if not check_vector_database():
@@ -817,13 +811,19 @@ def command_line_mode():
             if not run_preprocessing():
                 sys.exit(1)
         
-        print("執行增強版資料提取...")
+        print("執行資料提取...")
         enable_llm = not args.no_llm
         enable_dedupe = not args.no_dedupe
+        enable_strict_exclusion = not args.no_strict  # 預設啟用強排除模式
         
-        result = run_extraction(enable_llm=enable_llm, max_docs=args.max_docs, enable_dedupe=enable_dedupe)
+        result = run_extraction(
+            enable_llm=enable_llm, 
+            max_docs=args.max_docs, 
+            enable_dedupe=enable_dedupe,
+            enable_strict_exclusion=enable_strict_exclusion
+        )
         if result:
-            print(f"✅ 增強版提取完成！結果已保存")
+            print(f"✅ 完成！結果已保存")
         else:
             sys.exit(1)
             
@@ -836,7 +836,14 @@ def command_line_mode():
     elif args.extract:
         enable_llm = not args.no_llm
         enable_dedupe = not args.no_dedupe
-        result = run_extraction(enable_llm=enable_llm, max_docs=args.max_docs, enable_dedupe=enable_dedupe)
+        enable_strict_exclusion = not args.no_strict  # 預設啟用強排除模式
+        
+        result = run_extraction(
+            enable_llm=enable_llm, 
+            max_docs=args.max_docs, 
+            enable_dedupe=enable_dedupe,
+            enable_strict_exclusion=enable_strict_exclusion
+        )
         if not result:
             sys.exit(1)
     
@@ -883,10 +890,10 @@ def command_line_mode():
 
 def main():
     """主函數"""
-    print("🏢 ESG資料提取系統 v2.1 (增強版)")
+    print("🏢 ESG資料提取系統 v2.1")
     print("專注於再生塑膠關鍵字的智能提取")
-    print("支援精確過濾 + 連續/不連續關鍵字匹配 + 智能去重")
-    print("=" * 70)
+    print("支援連續和不連續關鍵字匹配 + 智能去重 + 強排除模式")
+    print("=" * 60)
     
     # 根據命令行參數決定運行模式
     if len(sys.argv) > 1:

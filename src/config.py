@@ -58,7 +58,7 @@ SEARCH_K = int(os.getenv("SEARCH_K", "10"))
 RERANK_K = int(os.getenv("RERANK_K", "3"))
 
 # 信心分數門檻
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.8"))
 
 # API管理參數
 MIN_REQUEST_INTERVAL = float(os.getenv("MIN_REQUEST_INTERVAL", "1.0"))  # 最小請求間隔
