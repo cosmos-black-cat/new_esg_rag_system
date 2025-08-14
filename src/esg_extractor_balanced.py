@@ -441,11 +441,11 @@ class BalancedMatcher:
         return list(set(numbers)), list(set(percentages))
 
 # =============================================================================
-# 平衡版多文件ESG提取器（加強去重）
+# 平衡版多文件ESG提取器（強化去重）
 # =============================================================================
 
 class BalancedMultiFileESGExtractor:
-    """平衡版多文件ESG提取器（加強去重和過濾）"""
+    """平衡版多文件ESG提取器（強化去重）"""
     
     def __init__(self, enable_llm: bool = True):
         self.enable_llm = enable_llm
@@ -455,7 +455,7 @@ class BalancedMultiFileESGExtractor:
         if self.enable_llm:
             self._init_llm()
         
-        print("✅ 平衡版多文件ESG提取器初始化完成（加強版）")
+        print("✅ 平衡版多文件ESG提取器初始化完成（強化去重版）")
 
     def _init_llm(self):
         """初始化LLM"""
@@ -468,7 +468,7 @@ class BalancedMultiFileESGExtractor:
             self.enable_llm = False
     
     def process_single_document(self, doc_info: DocumentInfo, max_documents: int = 400) -> Tuple[List[NumericExtraction], ProcessingSummary, str]:
-        """處理單個文檔 - 平衡版（加強去重）"""
+        """處理單個文檔 - 平衡版（強化去重）"""
         start_time = datetime.now()
         print(f"\n⚖️ 平衡版處理文檔: {doc_info.company_name} - {doc_info.report_year}")
         print("=" * 60)
@@ -482,7 +482,7 @@ class BalancedMultiFileESGExtractor:
         # 3. 平衡版篩選（加強過濾）
         extractions = self._balanced_filtering(documents, doc_info)
         
-        # 4. 強化後處理和去重
+        # 4. 強化後處理和去重（重點改進）
         extractions = self._enhanced_post_process_extractions(extractions)
         
         # 5. 創建處理摘要
@@ -512,7 +512,7 @@ class BalancedMultiFileESGExtractor:
     
     def process_multiple_documents(self, docs_info: Dict[str, DocumentInfo], max_documents: int = 400) -> Dict[str, Tuple]:
         """批量處理多個文檔"""
-        print(f"⚖️ 開始平衡版批量處理 {len(docs_info)} 個文檔（加強版）")
+        print(f"⚖️ 開始平衡版批量處理 {len(docs_info)} 個文檔（強化去重版）")
         print("=" * 60)
         
         results = {}
@@ -686,22 +686,59 @@ class BalancedMultiFileESGExtractor:
         return extractions
     
     def _enhanced_post_process_extractions(self, extractions: List[NumericExtraction]) -> List[NumericExtraction]:
-        """強化的後處理和去重"""
+        """強化的後處理和去重 - 重點改進"""
         if not extractions:
             return extractions
         
         print(f"🔧 強化後處理 {len(extractions)} 個提取結果...")
         
-        # 第1步：精確去重
+        # 第1步：按頁面分組
+        page_groups = {}
+        for extraction in extractions:
+            page_key = extraction.page_number
+            if page_key not in page_groups:
+                page_groups[page_key] = []
+            page_groups[page_key].append(extraction)
+        
+        print(f"📊 分組結果: {len(page_groups)} 個頁面")
+        
+        # 第2步：對每個頁面進行同數值去重
+        deduped_extractions = []
+        
+        for page_key, page_extractions in page_groups.items():
+            print(f"   處理 {page_key}: {len(page_extractions)} 個結果")
+            
+            # 按數值分組
+            value_groups = {}
+            for extraction in page_extractions:
+                value_key = extraction.value.strip()
+                if value_key not in value_groups:
+                    value_groups[value_key] = []
+                value_groups[value_key].append(extraction)
+            
+            # 對每個數值組保留最佳結果
+            for value_key, value_extractions in value_groups.items():
+                if len(value_extractions) == 1:
+                    # 只有一個結果，直接保留
+                    deduped_extractions.append(value_extractions[0])
+                else:
+                    # 多個相同數值，選擇最佳的
+                    best_extraction = self._select_best_extraction(value_extractions)
+                    deduped_extractions.append(best_extraction)
+                    print(f"     同數值去重: {value_key} 從 {len(value_extractions)} 個縮減為 1 個")
+        
+        print(f"📊 同數值去重後: {len(deduped_extractions)} 個結果")
+        
+        # 第3步：精確去重（全局）
         unique_extractions = []
         seen_combinations = set()
         
-        for extraction in extractions:
+        for extraction in deduped_extractions:
             # 創建精確唯一標識
             identifier = (
-                extraction.keyword,
                 extraction.value,
                 extraction.value_type,
+                extraction.page_number,
                 extraction.paragraph[:100]  # 使用段落前100字符
             )
             
@@ -711,7 +748,7 @@ class BalancedMultiFileESGExtractor:
         
         print(f"📊 精確去重後: {len(unique_extractions)} 個結果")
         
-        # 第2步：內容相似度去重
+        # 第4步：內容相似度去重
         if len(unique_extractions) > 1:
             filtered_extractions = []
             
@@ -733,11 +770,39 @@ class BalancedMultiFileESGExtractor:
             unique_extractions = filtered_extractions
             print(f"📊 相似度去重後: {len(unique_extractions)} 個結果")
         
-        # 第3步：按信心分數排序
+        # 第5步：按信心分數排序
         unique_extractions.sort(key=lambda x: x.confidence, reverse=True)
         
         print(f"✅ 強化後處理完成: 保留 {len(unique_extractions)} 個最終結果")
         return unique_extractions
+    
+    def _select_best_extraction(self, extractions: List[NumericExtraction]) -> NumericExtraction:
+        """從相同數值的多個提取結果中選擇最佳的"""
+        # 優先級規則：
+        # 1. 信心分數最高
+        # 2. 關鍵字相關性最高（連續關鍵字 > 不連續關鍵字）
+        # 3. 段落長度最合適（不太長不太短）
+        
+        # 按信心分數排序
+        sorted_extractions = sorted(extractions, key=lambda x: x.confidence, reverse=True)
+        
+        # 如果最高分數明顯高於其他，直接選擇
+        if sorted_extractions[0].confidence - sorted_extractions[1].confidence > 0.1:
+            return sorted_extractions[0]
+        
+        # 否則在高分組中進一步篩選
+        high_score_extractions = [e for e in sorted_extractions if e.confidence >= sorted_extractions[0].confidence - 0.05]
+        
+        # 優先選擇連續關鍵字
+        continuous_keyword_extractions = [e for e in high_score_extractions if " + " not in e.keyword]
+        if continuous_keyword_extractions:
+            return continuous_keyword_extractions[0]
+        
+        # 否則選擇段落長度最合適的
+        optimal_length_extraction = min(high_score_extractions, 
+                                      key=lambda x: abs(len(x.paragraph) - 300))  # 目標長度300字符
+        
+        return optimal_length_extraction
     
     def _is_similar_extraction(self, extraction1: NumericExtraction, extraction2: NumericExtraction) -> bool:
         """檢查兩個提取結果是否相似"""
@@ -813,11 +878,11 @@ class BalancedMultiFileESGExtractor:
             '提取數值': f"報告年度: {doc_info.report_year}",
             '數據類型': f"處理時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             '單位': '',
-            '段落內容': f"平衡版提取結果: {len(extractions)} 項（加強去重版）",
+            '段落內容': f"平衡版提取結果: {len(extractions)} 項（強化去重版）",
             '段落編號': '',
             '頁碼': '',
             '信心分數': '',
-            '上下文': f"提取器版本: v2.4 平衡版（加強）"
+            '上下文': f"提取器版本: v2.4 平衡版（強化去重）"
         }
         main_data.append(header_row)
         
@@ -863,11 +928,11 @@ class BalancedMultiFileESGExtractor:
                 '總提取結果': summary.total_extractions,
                 '處理時間(秒)': round(summary.processing_time, 2),
                 '處理日期': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                '提取器版本': 'v2.4 平衡版（加強去重和過濾）'
+                '提取器版本': 'v2.4 平衡版（強化去重）'
             }]
             pd.DataFrame(summary_data).to_excel(writer, sheet_name='處理摘要', index=False)
         
-        print(f"✅ 平衡版Excel檔案已保存（加強版）")
+        print(f"✅ 平衡版Excel檔案已保存（強化去重版）")
         return output_path
     
     # =============================================================================
@@ -895,10 +960,10 @@ class BalancedMultiFileESGExtractor:
 
 def main():
     """主函數 - 測試用"""
-    print("⚖️ 平衡版ESG提取器測試模式（加強版）")
+    print("⚖️ 平衡版ESG提取器測試模式（強化去重版）")
     
     extractor = BalancedMultiFileESGExtractor(enable_llm=False)
-    print("✅ 平衡版提取器初始化完成（加強版）")
+    print("✅ 平衡版提取器初始化完成（強化去重版）")
 
 if __name__ == "__main__":
     main()
