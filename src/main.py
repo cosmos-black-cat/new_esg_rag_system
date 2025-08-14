@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ESG資料提取系統 - 主程式 v2.1
-支援多文件處理、改進過濾邏輯、添加公司信息顯示
+ESG資料提取系統 - 主程式 v2.2
+修復：配置載入、多文件處理、過濾邏輯
 """
 
 import os
@@ -16,7 +16,7 @@ from typing import Optional, Tuple, Dict
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir))
 
-# 模組級別導入配置
+# 配置載入
 try:
     from config import (
         GOOGLE_API_KEY, GEMINI_MODEL, EMBEDDING_MODEL,
@@ -24,26 +24,27 @@ try:
         CHUNK_SIZE, SEARCH_K, CONFIDENCE_THRESHOLD
     )
     CONFIG_LOADED = True
+    print("✅ 配置載入成功")
 except ImportError as e:
-    print(f"⚠️ 配置載入失敗: {e}")
+    print(f"❌ 配置載入失敗: {e}")
+    print("請確保config.py文件存在且格式正確")
     CONFIG_LOADED = False
 
 # =============================================================================
-# 系統檢查函數（簡化版）
+# 系統檢查函數
 # =============================================================================
 
 def check_environment():
     """檢查系統環境"""
     print("🔧 檢查系統環境...")
     
-    # 檢查配置載入
     if not CONFIG_LOADED:
         print("❌ 配置文件載入失敗")
         return False
     
-    # 檢查API Key
     if not GOOGLE_API_KEY:
         print("❌ Google API Key未設置")
+        print("請在.env文件中設置GOOGLE_API_KEY=your_api_key")
         return False
     
     print(f"✅ Google API Key: {GOOGLE_API_KEY[:10]}...")
@@ -75,6 +76,7 @@ def find_pdf_files() -> Tuple[bool, list]:
         
         if not pdf_files:
             print(f"❌ 在 {DATA_PATH} 目錄中找不到PDF文件")
+            print("請將ESG報告PDF文件放入data目錄")
             return False, []
         
         print(f"✅ 找到 {len(pdf_files)} 個PDF文件:")
@@ -152,7 +154,7 @@ def run_preprocessing(pdf_files: list = None, force: bool = False) -> Optional[D
 def run_extraction(docs_info: Dict, max_docs: int = 300) -> Optional[Dict]:
     """執行資料提取"""
     try:
-        from esg_extractor_optimized import MultiFileESGExtractor, DocumentInfo
+        from esg_extractor import MultiFileESGExtractor, DocumentInfo
         
         print("🚀 初始化多文件ESG資料提取器...")
         extractor = MultiFileESGExtractor(enable_llm=True)
@@ -219,13 +221,13 @@ def show_latest_results():
             print("❌ 沒有找到結果文件")
             return
         
-        # 按修改時間排序，顯示最新的幾個
+        # 按修改時間排序
         excel_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         
         print("📊 最新結果文件")
         print("=" * 50)
         
-        for i, file in enumerate(excel_files[:5], 1):  # 只顯示最新5個
+        for i, file in enumerate(excel_files[:5], 1):
             file_time = datetime.fromtimestamp(file.stat().st_mtime)
             file_size = file.stat().st_size / 1024
             
@@ -252,20 +254,20 @@ def show_latest_results():
 
 def show_usage_guide():
     """顯示使用說明"""
-    print("\n💡 使用說明 v2.1")
+    print("\n💡 使用說明 v2.2")
     print("=" * 60)
     print("""
-🆕 新功能：
-   • 支援多文件批量處理
-   • 改進過濾邏輯，減少遺漏
-   • Excel結果包含公司名稱和年度
-   • 每間公司各自生成獨立結果文件
+🆕 v2.2 更新：
+   • 修復配置載入問題
+   • 改進過濾邏輯，減少相關資訊被誤過濾
+   • Excel第一行顯示公司名稱和報告年度
+   • 增強多文件批量處理功能
 
 📚 系統功能：
    專門提取ESG報告書中再生塑膠相關的數據
    
 🎯 支援的關鍵字：
-   • 再生塑膠、再生塑料、再生料、再生pp
+   • 再生塑膠、再生塑料、再生料、再生PP
    • 寶特瓶回收、循環經濟、廢料回收等
    
 📋 基本流程：
@@ -281,14 +283,14 @@ def show_usage_guide():
    
 ⚡ 快速開始：
    1. 放入多個PDF到data目錄
-   2. 執行 python main.py --auto
+   2. 執行 python main_fixed.py --auto
    3. 查看results目錄中的多個結果文件
    
 🔧 命令行選項：
-   python main.py --auto              # 自動處理所有文件
-   python main.py --preprocess        # 僅預處理
-   python main.py --extract           # 僅提取（需先預處理）
-   python main.py --force             # 強制重新預處理
+   python main_fixed.py --auto              # 自動處理所有文件
+   python main_fixed.py --preprocess        # 僅預處理
+   python main_fixed.py --extract           # 僅提取（需先預處理）
+   python main_fixed.py --force             # 強制重新預處理
 """)
 
 # =============================================================================
@@ -299,8 +301,8 @@ def interactive_menu():
     """互動式主選單"""
     while True:
         print("\n" + "🔷" * 20)
-        print("🏢 ESG資料提取系統 v2.1")
-        print("支援多文件處理 + 改進過濾邏輯")
+        print("🏢 ESG資料提取系統 v2.2")
+        print("修復版：配置載入、過濾邏輯、多文件處理")
         print("🔷" * 20)
         print("1. 📊 執行完整資料提取（支援多文件）")
         print("2. 🔄 重新預處理PDF（支援多文件）")
@@ -384,16 +386,16 @@ def interactive_menu():
 def command_line_mode():
     """命令行模式"""
     parser = argparse.ArgumentParser(
-        description="ESG資料提取系統 v2.1 - 支援多文件處理",
+        description="ESG資料提取系統 v2.2 - 修復版",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用範例:
-  python main.py                    # 互動模式
-  python main.py --auto             # 自動執行完整流程（所有PDF）
-  python main.py --preprocess       # 僅預處理所有PDF
-  python main.py --extract          # 僅執行提取
-  python main.py --force            # 強制重新預處理
-  python main.py --results          # 查看最新結果
+  python main_fixed.py                    # 互動模式
+  python main_fixed.py --auto             # 自動執行完整流程（所有PDF）
+  python main_fixed.py --preprocess       # 僅預處理所有PDF
+  python main_fixed.py --extract          # 僅執行提取
+  python main_fixed.py --force            # 強制重新預處理
+  python main_fixed.py --results          # 查看最新結果
         """
     )
     
@@ -448,7 +450,7 @@ def command_line_mode():
         if not has_pdfs:
             sys.exit(1)
         
-        docs_info = run_preprocessing(pdf_files, force=False)  # 不強制重建
+        docs_info = run_preprocessing(pdf_files, force=False)
         if not docs_info:
             print("❌ 需要先執行預處理")
             sys.exit(1)
@@ -466,8 +468,8 @@ def command_line_mode():
 
 def main():
     """主函數"""
-    print("🏢 ESG資料提取系統 v2.1")
-    print("支援多文件處理、改進過濾邏輯、顯示公司信息")
+    print("🏢 ESG資料提取系統 v2.2")
+    print("修復版：配置載入、過濾邏輯、多文件處理")
     print("=" * 60)
     
     # 根據命令行參數決定運行模式
