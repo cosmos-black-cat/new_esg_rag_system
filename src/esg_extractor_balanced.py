@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ESG資料提取器 v2.4 - 平衡版
-在提取準確度和覆蓋率之間取得平衡
+ESG資料提取器 v2.4 - 平衡版（修正重複和不相關內容）
+在提取準確度和覆蓋率之間取得平衡，加強去重和過濾
 """
 
 import json
@@ -67,7 +67,7 @@ class ProcessingSummary:
     processing_time: float
 
 # =============================================================================
-# 平衡版關鍵字配置
+# 平衡版關鍵字配置（加強過濾）
 # =============================================================================
 
 class BalancedKeywordConfig:
@@ -111,9 +111,9 @@ class BalancedKeywordConfig:
         ]
     }
     
-    # 平衡版排除規則 - 只排除明確無關的內容
-    BALANCED_EXCLUSION_RULES = {
-        # 明確排除的主題（減少排除項目）
+    # 強化排除規則 - 精確排除不相關內容
+    ENHANCED_EXCLUSION_RULES = {
+        # 明確排除的主題（擴充版）
         "exclude_topics": [
             # 職業安全
             "職業災害", "工安", "安全事故", "職災",
@@ -125,15 +125,29 @@ class BalancedKeywordConfig:
             "雨水回收", "廢水處理", "水質監測",
             
             # 改善案數量統計
-            "改善案", "改善專案", "案例選拔"
+            "改善案", "改善專案", "案例選拔",
+            
+            # 能源轉型（非塑膠相關）
+            "能源轉型", "燃油改燃", "鍋爐改善", "天然氣燃燒",
+            
+            # 節能產品（非塑膠材料）
+            "節能產品", "隔熱漆", "節能窗", "隔熱紙", "酷樂漆",
+            "氣密窗", "隔熱產品", "保溫材料", "建材產品",
+            
+            # 其他非塑膠環保產品
+            "太陽能", "風電", "綠能", "光電", "電池材料"
         ],
         
-        # 排除的特定上下文片段
+        # 排除的特定上下文片段（擴充版）
         "exclude_contexts": [
             "垂直馬拉松", "史上最環保賽衣", "各界好手",
             "職業災害比率", "工安統計", 
             "節能改善案", "節水改善案", "優良案例",
-            "雨水回收量減少", "降雨量減少"
+            "雨水回收量減少", "降雨量減少",
+            "燃油改燃汽鍋爐", "天然氣燃燒機", "鍋爐改造",
+            "酷樂漆", "隔熱漆", "節能氣密窗", "冰酷隔熱紙",
+            "夏日空調耗能", "熱傳導係數", "能源消耗",
+            "隔熱產品", "節能產品研發", "極端氣候影響"
         ],
         
         # 排除的數值模式（更精確）
@@ -143,35 +157,27 @@ class BalancedKeywordConfig:
             r'馬拉松.*?\d+',
             r'賽事.*?\d+',
             r'改善案.*?\d+\s*件',
-            r'案例.*?\d+\s*件'
+            r'案例.*?\d+\s*件',
+            r'鍋爐.*?\d+(?:\.\d+)?.*?千元',
+            r'燃油.*?\d+(?:\.\d+)?.*?噸',
+            r'節能.*?\d+(?:\.\d+)?%',
+            r'隔熱.*?\d+(?:\.\d+)?%',
+            r'空調.*?\d+(?:\.\d+)?%'
         ]
     }
     
-    # 相關性指標（調整權重，降低要求）
-    RELEVANCE_INDICATORS = {
+    # 必須包含的塑膠相關指標（加強版）
+    PLASTIC_SPECIFIC_INDICATORS = {
         "plastic_materials": [
             "塑膠", "塑料", "聚酯", "PET", "PP", "聚合物",
-            "樹脂", "粒子", "顆粒", "材料", "聚合物", "塑膠粒"
+            "樹脂", "粒子", "顆粒", "材料", "塑膠粒", "聚酯粒",
+            "寶特瓶", "瓶片", "容器", "包裝", "膜材", "纖維"
         ],
         
-        "recycling_process": [
+        "recycling_specific": [
             "回收", "再生", "循環", "再利用", "回收利用",
-            "造粒", "再製", "轉換", "處理", "循環經濟"
-        ],
-        
-        "production_application": [
-            "生產", "製造", "產能", "產量", "使用", "應用",
-            "製成", "加工", "生產線", "工廠", "產品"
-        ],
-        
-        "environmental_benefit": [
-            "減碳", "碳排放", "環保", "永續", "節能", "減排",
-            "碳足跡", "綠色", "低碳", "效益", "環境"
-        ],
-        
-        "quantity_indicators": [
-            "億支", "萬支", "噸", "公斤", "kg", "萬噸", "千噸",
-            "件", "個", "批", "%", "百分比"
+            "造粒", "再製", "轉換", "處理", "循環經濟",
+            "廢料", "廢棄", "回收料", "再生料", "PCR"
         ]
     }
     
@@ -186,11 +192,11 @@ class BalancedKeywordConfig:
         return all_keywords
 
 # =============================================================================
-# 平衡版匹配引擎
+# 平衡版匹配引擎（加強過濾和去重）
 # =============================================================================
 
 class BalancedMatcher:
-    """平衡版匹配引擎，確保合理的提取覆蓋率"""
+    """平衡版匹配引擎，確保合理的提取覆蓋率並精確過濾"""
     
     def __init__(self):
         self.config = BalancedKeywordConfig()
@@ -217,12 +223,12 @@ class BalancedMatcher:
     
     def comprehensive_relevance_check(self, text: str, keyword: Union[str, tuple]) -> Tuple[bool, float, str]:
         """
-        平衡版相關性檢查 - 降低門檻但保持質量
+        增強版相關性檢查 - 精確過濾非塑膠相關內容
         """
         text_lower = text.lower()
         
-        # 第1步：快速排除檢查（只排除明確無關的）
-        if self._is_clearly_excluded(text_lower):
+        # 第1步：強化排除檢查
+        if self._is_clearly_excluded_enhanced(text_lower):
             return False, 0.0, "明確無關內容"
         
         # 第2步：關鍵字匹配檢查
@@ -230,43 +236,96 @@ class BalancedMatcher:
         if not keyword_match:
             return False, 0.0, "關鍵字不匹配"
         
-        # 第3步：相關性指標檢查（降低要求）
+        # 第3步：塑膠特定性檢查（新增）
+        plastic_relevance = self._check_plastic_specific_relevance(text_lower)
+        if plastic_relevance < 0.3:
+            return False, 0.0, f"非塑膠相關內容: {plastic_relevance:.2f}"
+        
+        # 第4步：相關性指標檢查（調整）
         relevance_score = self._calculate_balanced_relevance_score(text_lower)
         
-        # 第4步：特殊情況加分
+        # 第5步：特殊情況加分
         bonus_score = self._calculate_bonus_score(text_lower)
         
-        # 計算最終分數（更寬鬆的評分）
-        final_score = keyword_confidence * 0.4 + relevance_score * 0.4 + bonus_score * 0.2
+        # 計算最終分數（加入塑膠特定性權重）
+        final_score = (
+            keyword_confidence * 0.3 + 
+            plastic_relevance * 0.3 + 
+            relevance_score * 0.3 + 
+            bonus_score * 0.1
+        )
         
-        # 降低門檻到0.5
-        is_relevant = final_score > 0.5
+        # 門檻設為0.55，稍微提高以減少無關內容
+        is_relevant = final_score > 0.55
         
-        details = f"關鍵字:{keyword_confidence:.2f}, 相關性:{relevance_score:.2f}, 加分:{bonus_score:.2f}"
+        details = f"關鍵字:{keyword_confidence:.2f}, 塑膠相關:{plastic_relevance:.2f}, 相關性:{relevance_score:.2f}, 加分:{bonus_score:.2f}"
         
         return is_relevant, final_score, details
     
-    def _is_clearly_excluded(self, text: str) -> bool:
-        """只排除明確無關的內容"""
+    def _is_clearly_excluded_enhanced(self, text: str) -> bool:
+        """強化版排除檢查"""
         # 檢查明確排除主題
-        for topic in self.config.BALANCED_EXCLUSION_RULES["exclude_topics"]:
+        for topic in self.config.ENHANCED_EXCLUSION_RULES["exclude_topics"]:
             if topic in text:
                 return True
         
         # 檢查特定排除上下文
-        for context in self.config.BALANCED_EXCLUSION_RULES["exclude_contexts"]:
+        for context in self.config.ENHANCED_EXCLUSION_RULES["exclude_contexts"]:
             if context in text:
                 return True
         
         # 檢查排除模式
-        for pattern in self.config.BALANCED_EXCLUSION_RULES["exclude_patterns"]:
+        for pattern in self.config.ENHANCED_EXCLUSION_RULES["exclude_patterns"]:
             if re.search(pattern, text, re.IGNORECASE):
+                return True
+        
+        # 額外檢查：能源轉型相關
+        energy_indicators = ["燃油", "鍋爐", "天然氣", "燃燒機", "能源轉型"]
+        if any(indicator in text for indicator in energy_indicators):
+            # 如果同時包含塑膠相關詞彙，則不排除
+            plastic_indicators = ["塑膠", "塑料", "PET", "PP", "寶特瓶", "聚酯"]
+            if not any(plastic in text for plastic in plastic_indicators):
+                return True
+        
+        # 額外檢查：節能產品相關
+        energy_saving_indicators = ["隔熱", "節能窗", "保溫", "熱傳導", "空調耗能"]
+        if any(indicator in text for indicator in energy_saving_indicators):
+            # 如果同時包含塑膠相關詞彙，則不排除
+            plastic_indicators = ["塑膠", "塑料", "PET", "PP", "寶特瓶", "聚酯"]
+            if not any(plastic in text for plastic in plastic_indicators):
                 return True
         
         return False
     
+    def _check_plastic_specific_relevance(self, text: str) -> float:
+        """檢查塑膠特定相關性（新增方法）"""
+        plastic_score = 0.0
+        recycling_score = 0.0
+        
+        # 檢查塑膠材料相關詞彙
+        plastic_count = 0
+        for indicator in self.config.PLASTIC_SPECIFIC_INDICATORS["plastic_materials"]:
+            if indicator in text:
+                plastic_count += 1
+        
+        plastic_score = min(plastic_count / 3.0, 1.0)  # 正規化到0-1
+        
+        # 檢查回收再生相關詞彙
+        recycling_count = 0
+        for indicator in self.config.PLASTIC_SPECIFIC_INDICATORS["recycling_specific"]:
+            if indicator in text:
+                recycling_count += 1
+        
+        recycling_score = min(recycling_count / 2.0, 1.0)  # 正規化到0-1
+        
+        # 必須同時包含塑膠和回收相關詞彙
+        if plastic_score > 0 and recycling_score > 0:
+            return (plastic_score + recycling_score) / 2.0
+        else:
+            return 0.0  # 如果任一類別為0，則返回0
+    
     def _calculate_balanced_relevance_score(self, text: str) -> float:
-        """計算平衡版相關性分數（降低要求）"""
+        """計算平衡版相關性分數（保持不變）"""
         total_score = 0.0
         category_weights = {
             "plastic_materials": 0.25,
@@ -276,7 +335,30 @@ class BalancedMatcher:
             "quantity_indicators": 0.15
         }
         
-        for category, indicators in self.config.RELEVANCE_INDICATORS.items():
+        relevance_indicators = {
+            "plastic_materials": [
+                "塑膠", "塑料", "聚酯", "PET", "PP", "聚合物",
+                "樹脂", "粒子", "顆粒", "材料", "聚合物", "塑膠粒"
+            ],
+            "recycling_process": [
+                "回收", "再生", "循環", "再利用", "回收利用",
+                "造粒", "再製", "轉換", "處理", "循環經濟"
+            ],
+            "production_application": [
+                "生產", "製造", "產能", "產量", "使用", "應用",
+                "製成", "加工", "生產線", "工廠", "產品"
+            ],
+            "environmental_benefit": [
+                "減碳", "碳排放", "環保", "永續", "節能", "減排",
+                "碳足跡", "綠色", "低碳", "效益", "環境"
+            ],
+            "quantity_indicators": [
+                "億支", "萬支", "噸", "公斤", "kg", "萬噸", "千噸",
+                "件", "個", "批", "%", "百分比"
+            ]
+        }
+        
+        for category, indicators in relevance_indicators.items():
             category_score = 0.0
             for indicator in indicators:
                 if indicator in text:
@@ -290,7 +372,7 @@ class BalancedMatcher:
         return total_score
     
     def _calculate_bonus_score(self, text: str) -> float:
-        """計算加分項目"""
+        """計算加分項目（保持不變）"""
         bonus_score = 0.0
         
         # 特殊情況加分
@@ -311,7 +393,7 @@ class BalancedMatcher:
         return min(bonus_score, 1.0)
     
     def _match_keyword_flexible(self, text: str, keyword: Union[str, tuple]) -> Tuple[bool, float, str]:
-        """靈活的關鍵字匹配"""
+        """靈活的關鍵字匹配（保持不變）"""
         text_lower = text.lower()
         
         if isinstance(keyword, str):
@@ -344,7 +426,7 @@ class BalancedMatcher:
         return False, 0.0, ""
     
     def extract_numbers_and_percentages(self, text: str) -> Tuple[List[str], List[str]]:
-        """提取數值和百分比"""
+        """提取數值和百分比（保持不變）"""
         numbers = []
         percentages = []
         
@@ -359,11 +441,11 @@ class BalancedMatcher:
         return list(set(numbers)), list(set(percentages))
 
 # =============================================================================
-# 平衡版多文件ESG提取器
+# 平衡版多文件ESG提取器（加強去重）
 # =============================================================================
 
 class BalancedMultiFileESGExtractor:
-    """平衡版多文件ESG提取器"""
+    """平衡版多文件ESG提取器（加強去重和過濾）"""
     
     def __init__(self, enable_llm: bool = True):
         self.enable_llm = enable_llm
@@ -373,7 +455,7 @@ class BalancedMultiFileESGExtractor:
         if self.enable_llm:
             self._init_llm()
         
-        print("✅ 平衡版多文件ESG提取器初始化完成")
+        print("✅ 平衡版多文件ESG提取器初始化完成（加強版）")
 
     def _init_llm(self):
         """初始化LLM"""
@@ -386,7 +468,7 @@ class BalancedMultiFileESGExtractor:
             self.enable_llm = False
     
     def process_single_document(self, doc_info: DocumentInfo, max_documents: int = 400) -> Tuple[List[NumericExtraction], ProcessingSummary, str]:
-        """處理單個文檔 - 平衡版"""
+        """處理單個文檔 - 平衡版（加強去重）"""
         start_time = datetime.now()
         print(f"\n⚖️ 平衡版處理文檔: {doc_info.company_name} - {doc_info.report_year}")
         print("=" * 60)
@@ -397,11 +479,11 @@ class BalancedMultiFileESGExtractor:
         # 2. 增強文檔檢索
         documents = self._enhanced_document_retrieval(db, max_documents)
         
-        # 3. 平衡版篩選
+        # 3. 平衡版篩選（加強過濾）
         extractions = self._balanced_filtering(documents, doc_info)
         
-        # 4. 後處理和去重
-        extractions = self._post_process_extractions(extractions)
+        # 4. 強化後處理和去重
+        extractions = self._enhanced_post_process_extractions(extractions)
         
         # 5. 創建處理摘要
         end_time = datetime.now()
@@ -430,7 +512,7 @@ class BalancedMultiFileESGExtractor:
     
     def process_multiple_documents(self, docs_info: Dict[str, DocumentInfo], max_documents: int = 400) -> Dict[str, Tuple]:
         """批量處理多個文檔"""
-        print(f"⚖️ 開始平衡版批量處理 {len(docs_info)} 個文檔")
+        print(f"⚖️ 開始平衡版批量處理 {len(docs_info)} 個文檔（加強版）")
         print("=" * 60)
         
         results = {}
@@ -471,7 +553,7 @@ class BalancedMultiFileESGExtractor:
         return db
     
     def _enhanced_document_retrieval(self, db, max_docs: int) -> List[Document]:
-        """增強的文檔檢索"""
+        """增強的文檔檢索（保持不變）"""
         keywords = self.keyword_config.get_all_keywords()
         all_docs = []
         
@@ -519,8 +601,8 @@ class BalancedMultiFileESGExtractor:
         return result_docs
     
     def _balanced_filtering(self, documents: List[Document], doc_info: DocumentInfo) -> List[NumericExtraction]:
-        """平衡版篩選 - 確保基本覆蓋率"""
-        print("⚖️ 執行平衡版篩選...")
+        """平衡版篩選 - 確保基本覆蓋率（加強過濾）"""
+        print("⚖️ 執行平衡版篩選（加強過濾）...")
         
         keywords = self.keyword_config.get_all_keywords()
         extractions = []
@@ -538,13 +620,13 @@ class BalancedMultiFileESGExtractor:
                 for keyword in keywords:
                     is_relevant, relevance_score, details = self.matcher.comprehensive_relevance_check(paragraph, keyword)
                     
-                    if is_relevant and relevance_score > 0.5:  # 平衡門檻
+                    if is_relevant and relevance_score > 0.55:  # 稍微提高門檻
                         # 提取數值
                         numbers, percentages = self.matcher.extract_numbers_and_percentages(paragraph)
                         
                         # 如果沒有明確數值，但有重要關鍵字，也保留
                         if not numbers and not percentages:
-                            if relevance_score > 0.7:  # 高相關性的描述性內容
+                            if relevance_score > 0.75:  # 提高描述性內容的門檻
                                 keyword_str = keyword if isinstance(keyword, str) else " + ".join(keyword)
                                 
                                 extraction = NumericExtraction(
@@ -603,8 +685,87 @@ class BalancedMultiFileESGExtractor:
         print(f"✅ 平衡篩選完成: 找到 {len(extractions)} 個候選結果")
         return extractions
     
+    def _enhanced_post_process_extractions(self, extractions: List[NumericExtraction]) -> List[NumericExtraction]:
+        """強化的後處理和去重"""
+        if not extractions:
+            return extractions
+        
+        print(f"🔧 強化後處理 {len(extractions)} 個提取結果...")
+        
+        # 第1步：精確去重
+        unique_extractions = []
+        seen_combinations = set()
+        
+        for extraction in extractions:
+            # 創建精確唯一標識
+            identifier = (
+                extraction.keyword,
+                extraction.value,
+                extraction.value_type,
+                extraction.paragraph[:100]  # 使用段落前100字符
+            )
+            
+            if identifier not in seen_combinations:
+                seen_combinations.add(identifier)
+                unique_extractions.append(extraction)
+        
+        print(f"📊 精確去重後: {len(unique_extractions)} 個結果")
+        
+        # 第2步：內容相似度去重
+        if len(unique_extractions) > 1:
+            filtered_extractions = []
+            
+            for i, extraction in enumerate(unique_extractions):
+                is_duplicate = False
+                
+                for j, existing in enumerate(filtered_extractions):
+                    # 檢查是否為相似內容
+                    if self._is_similar_extraction(extraction, existing):
+                        is_duplicate = True
+                        # 保留信心分數更高的
+                        if extraction.confidence > existing.confidence:
+                            filtered_extractions[j] = extraction
+                        break
+                
+                if not is_duplicate:
+                    filtered_extractions.append(extraction)
+            
+            unique_extractions = filtered_extractions
+            print(f"📊 相似度去重後: {len(unique_extractions)} 個結果")
+        
+        # 第3步：按信心分數排序
+        unique_extractions.sort(key=lambda x: x.confidence, reverse=True)
+        
+        print(f"✅ 強化後處理完成: 保留 {len(unique_extractions)} 個最終結果")
+        return unique_extractions
+    
+    def _is_similar_extraction(self, extraction1: NumericExtraction, extraction2: NumericExtraction) -> bool:
+        """檢查兩個提取結果是否相似"""
+        # 檢查關鍵字相似度
+        if extraction1.keyword != extraction2.keyword:
+            return False
+        
+        # 檢查數值相似度
+        if extraction1.value == extraction2.value:
+            return True
+        
+        # 檢查段落內容相似度（簡化版）
+        para1_words = set(extraction1.paragraph[:200].split())
+        para2_words = set(extraction2.paragraph[:200].split())
+        
+        if para1_words and para2_words:
+            overlap = len(para1_words & para2_words)
+            total = len(para1_words | para2_words)
+            similarity = overlap / total if total > 0 else 0
+            
+            # 如果段落相似度超過70%，認為是重複
+            if similarity > 0.7:
+                return True
+        
+        return False
+    
     def _flexible_paragraph_split(self, text: str) -> List[str]:
-        """靈活的段落分割"""
+        """靈活的段落分割（保持不變）"""
         # 嘗試多種分割方式
         paragraphs = []
         
@@ -631,35 +792,6 @@ class BalancedMultiFileESGExtractor:
         
         return unique_paragraphs
     
-    def _post_process_extractions(self, extractions: List[NumericExtraction]) -> List[NumericExtraction]:
-        """後處理和去重"""
-        if not extractions:
-            return extractions
-        
-        print(f"🔧 後處理 {len(extractions)} 個提取結果...")
-        
-        # 去重
-        unique_extractions = []
-        seen_combinations = set()
-        
-        for extraction in extractions:
-            # 創建唯一標識
-            identifier = (
-                extraction.keyword,
-                extraction.value,
-                extraction.paragraph[:50]  # 使用段落前50字符
-            )
-            
-            if identifier not in seen_combinations:
-                seen_combinations.add(identifier)
-                unique_extractions.append(extraction)
-        
-        # 按信心分數排序
-        unique_extractions.sort(key=lambda x: x.confidence, reverse=True)
-        
-        print(f"✅ 後處理完成: 保留 {len(unique_extractions)} 個唯一結果")
-        return unique_extractions
-    
     def _export_to_excel(self, extractions: List[NumericExtraction], summary: ProcessingSummary, doc_info: DocumentInfo) -> str:
         """匯出結果到Excel"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -681,11 +813,11 @@ class BalancedMultiFileESGExtractor:
             '提取數值': f"報告年度: {doc_info.report_year}",
             '數據類型': f"處理時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             '單位': '',
-            '段落內容': f"平衡版提取結果: {len(extractions)} 項",
+            '段落內容': f"平衡版提取結果: {len(extractions)} 項（加強去重版）",
             '段落編號': '',
             '頁碼': '',
             '信心分數': '',
-            '上下文': f"提取器版本: v2.4 平衡版"
+            '上下文': f"提取器版本: v2.4 平衡版（加強）"
         }
         main_data.append(header_row)
         
@@ -731,11 +863,11 @@ class BalancedMultiFileESGExtractor:
                 '總提取結果': summary.total_extractions,
                 '處理時間(秒)': round(summary.processing_time, 2),
                 '處理日期': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                '提取器版本': 'v2.4 平衡版'
+                '提取器版本': 'v2.4 平衡版（加強去重和過濾）'
             }]
             pd.DataFrame(summary_data).to_excel(writer, sheet_name='處理摘要', index=False)
         
-        print(f"✅ 平衡版Excel檔案已保存")
+        print(f"✅ 平衡版Excel檔案已保存（加強版）")
         return output_path
     
     # =============================================================================
@@ -763,10 +895,10 @@ class BalancedMultiFileESGExtractor:
 
 def main():
     """主函數 - 測試用"""
-    print("⚖️ 平衡版ESG提取器測試模式")
+    print("⚖️ 平衡版ESG提取器測試模式（加強版）")
     
     extractor = BalancedMultiFileESGExtractor(enable_llm=False)
-    print("✅ 平衡版提取器初始化完成")
+    print("✅ 平衡版提取器初始化完成（加強版）")
 
 if __name__ == "__main__":
     main()
