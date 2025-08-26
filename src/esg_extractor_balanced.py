@@ -1167,39 +1167,49 @@ class BalancedMultiFileESGExtractor:
         return unique_paragraphs
     
     def _export_to_excel(self, extractions: List[NumericExtraction], summary: ProcessingSummary, doc_info: DocumentInfo) -> str:
-        """匯出結果到Excel"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        company_safe = re.sub(r'[^\w\s-]', '', doc_info.company_name).strip()
-        
-        output_filename = f"ESG提取結果_平衡版_{company_safe}_{doc_info.report_year}_{timestamp}.xlsx"
-        output_path = os.path.join(RESULTS_PATH, output_filename)
-        
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        print(f"📊 匯出增強版結果到Excel: {output_filename}")
-        
-        # 準備主要數據
-        main_data = []
-        
-        # 第一行：公司信息
-        header_row = {
-            '關鍵字': f"公司: {doc_info.company_name}",
-            '提取數值': f"報告年度: {doc_info.report_year}",
-            '數據類型': f"處理時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            '單位': '',
-            '段落內容': f"增強版平衡提取結果: {len(extractions)} 項（精確數值關聯 + 頁面去重）",
-            '段落編號': '',
-            '頁碼': '',
-            '信心分數': '',
-            '上下文': f"提取器版本: v2.5 平衡版（精確關聯 + 每頁最多2筆）",
-            '關鍵字距離': ''
-        }
-        main_data.append(header_row)
-        
-        # 空行分隔
-        main_data.append({col: '' for col in header_row.keys()})
-        
-        # 提取結果
+    """匯出結果到Excel，根據提取數量決定檔名"""
+    company_safe = re.sub(r'[^\w\s-]', '', doc_info.company_name).strip()
+    
+    # 根據提取結果數量決定檔名
+    if len(extractions) == 0:
+        output_filename = f"ESG提取結果_無提取_{company_safe}_{doc_info.report_year}.xlsx"
+        status_message = "無提取結果"
+        result_count_message = "未找到相關再生塑膠數據"
+        version_info = f"提取器版本: v2.5 平衡版（無提取結果）"
+    else:
+        output_filename = f"ESG提取結果_{company_safe}_{doc_info.report_year}.xlsx"
+        status_message = f"平衡版提取結果: {len(extractions)} 項"
+        result_count_message = f"成功提取 {len(extractions)} 項相關數據"
+        version_info = f"提取器版本: v2.5 平衡版（精確關聯）"
+    
+    output_path = os.path.join(RESULTS_PATH, output_filename)
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    print(f"📊 匯出結果到Excel: {output_filename}")
+    
+    # 準備主要數據
+    main_data = []
+    
+    # 第一行：公司信息
+    header_row = {
+        '關鍵字': f"公司: {doc_info.company_name}",
+        '提取數值': f"報告年度: {doc_info.report_year}",
+        '數據類型': f"處理時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        '單位': '',
+        '段落內容': result_count_message,
+        '段落編號': '',
+        '頁碼': '',
+        '信心分數': '',
+        '上下文': version_info
+    }
+    main_data.append(header_row)
+    
+    # 空行分隔
+    main_data.append({col: '' for col in header_row.keys()})
+    
+    # 如果有提取結果，添加結果數據
+    if len(extractions) > 0:
         for extraction in extractions:
             main_data.append({
                 '關鍵字': extraction.keyword,
@@ -1210,44 +1220,77 @@ class BalancedMultiFileESGExtractor:
                 '段落編號': extraction.paragraph_number,
                 '頁碼': extraction.page_number,
                 '信心分數': round(extraction.confidence, 3),
-                '上下文': extraction.context_window[:200] + "..." if len(extraction.context_window) > 200 else extraction.context_window,
-                '關鍵字距離': f"{extraction.keyword_distance}字" if extraction.keyword_distance > 0 else "N/A"
+                '上下文': extraction.context_window[:200] + "..." if len(extraction.context_window) > 200 else extraction.context_window
             })
-        
-        # 統計數據
-        stats_data = []
+    else:
+        # 如果沒有提取結果，添加說明行
+        no_result_row = {
+            '關鍵字': '無相關關鍵字匹配',
+            '提取數值': 'N/A',
+            '數據類型': 'no_data',
+            '單位': '',
+            '段落內容': '在此份ESG報告中未找到再生塑膠相關的數值數據',
+            '段落編號': '',
+            '頁碼': '',
+            '信心分數': 0.0,
+            '上下文': '可能的原因：1) 該公司未涉及再生塑膠業務 2) 報告中未詳細披露相關數據 3) 關鍵字匹配範圍需要調整'
+        }
+        main_data.append(no_result_row)
+    
+    # 統計數據
+    stats_data = []
+    if len(extractions) > 0:
         for keyword, count in summary.keywords_found.items():
             keyword_extractions = [e for e in extractions if e.keyword == keyword]
-            avg_distance = np.mean([e.keyword_distance for e in keyword_extractions if e.keyword_distance > 0]) if keyword_extractions else 0
             
             stats_data.append({
                 '關鍵字': keyword,
                 '提取數量': count,
                 '平均信心分數': round(np.mean([e.confidence for e in keyword_extractions]) if keyword_extractions else 0, 3),
-                '最高信心分數': round(max([e.confidence for e in keyword_extractions]) if keyword_extractions else 0, 3),
-                '平均距離': round(avg_distance, 1) if avg_distance > 0 else "N/A"
+                '最高信心分數': round(max([e.confidence for e in keyword_extractions]) if keyword_extractions else 0, 3)
             })
-        
-        # 寫入Excel
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            pd.DataFrame(main_data).to_excel(writer, sheet_name='增強版提取結果', index=False)
-            pd.DataFrame(stats_data).to_excel(writer, sheet_name='關鍵字統計', index=False)
-            
-            # 處理摘要
-            summary_data = [{
-                '公司名稱': summary.company_name,
-                '報告年度': summary.report_year,
-                '總文檔數': summary.total_documents,
-                '總提取結果': summary.total_extractions,
-                '處理時間(秒)': round(summary.processing_time, 2),
-                '處理日期': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                '提取器版本': 'v2.5 平衡版（精確數值關聯 + 頁面去重：每頁最多2筆）'
-            }]
-            pd.DataFrame(summary_data).to_excel(writer, sheet_name='處理摘要', index=False)
-        
-        print(f"✅ 增強版Excel檔案已保存（精確關聯 + 頁面去重）")
-        return output_path
+    else:
+        # 無結果時的統計說明
+        stats_data.append({
+            '關鍵字': '搜尋摘要',
+            '提取數量': 0,
+            '平均信心分數': 0.0,
+            '最高信心分數': 0.0,
+            '說明': '未找到匹配的再生塑膠相關關鍵字'
+        })
     
+    # 寫入Excel
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        # 主要結果工作表
+        sheet_name = '提取結果' if len(extractions) > 0 else '無提取結果'
+        pd.DataFrame(main_data).to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        # 統計工作表
+        pd.DataFrame(stats_data).to_excel(writer, sheet_name='統計摘要', index=False)
+        
+        # 處理摘要
+        summary_data = [{
+            '公司名稱': summary.company_name,
+            '報告年度': summary.report_year,
+            '總文檔數': summary.total_documents,
+            '總提取結果': summary.total_extractions,
+            '處理狀態': '成功提取' if len(extractions) > 0 else '無相關數據',
+            '處理時間(秒)': round(summary.processing_time, 2),
+            '處理日期': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '提取器版本': 'v2.5 平衡版',
+            '備註': '' if len(extractions) > 0 else '該公司報告中未發現再生塑膠相關數據'
+        }]
+        pd.DataFrame(summary_data).to_excel(writer, sheet_name='處理摘要', index=False)
+    
+    # 根據結果輸出不同的成功訊息
+    if len(extractions) > 0:
+        print(f"✅ Excel檔案已保存，包含 {len(extractions)} 項提取結果")
+    else:
+        print(f"✅ Excel檔案已保存，標記為無提取結果")
+        print(f"💡 建議：檢查該公司是否涉及再生塑膠業務或調整搜尋關鍵字")
+    
+    return output_path
+
     # =============================================================================
     # 輔助方法
     # =============================================================================

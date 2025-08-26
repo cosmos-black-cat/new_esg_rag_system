@@ -301,8 +301,10 @@ class GeminiAPIManager:
 
 # 配置你的API keys - 保持原有配置格式
 GEMINI_API_KEYS = [
-    " #Your API Key 1 ",
-    " #Your API Key 2 "
+    "AIzaSyAR8oJDZrvL6C44opQrm23xfepIZEVJyGI",
+    "AIzaSyDQs4bJr4VHcO5XZMHM5Gg3GKVSi7hifoU", 
+    "AIzaSyBP3g6Ovbi0tgH2cekw3oUdrF-HoC3MLRQ",
+    "AIzaSyAM3Bn9USN6lIymEW9BwZfscY2H8eKPPvw"
 ]
 
 def create_api_manager(model_name: str = "models/gemini-1.5-flash") -> GeminiAPIManager:
