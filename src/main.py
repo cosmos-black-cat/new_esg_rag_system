@@ -504,20 +504,20 @@ def interactive_menu():
         print("🏢 ESG資料提取系統 v2.5 平衡版")
         print("在準確度與覆蓋率之間取得平衡，新增彙整功能")
         print("⚖️" * 20)
-        print("1. ⚖️ 執行平衡版資料提取（推薦）")
+        print("1. ⚖️ 執行資料提取")
         print("2. 🔄 重新預處理PDF")
         print("3. 📊 查看最新結果")
         print("4. 📈 比較版本差異")
         print("5. 🔗 彙整多公司多年度結果（新功能！）")
         print("6. ⚙️  顯示系統信息")
-        print("7. 💡 平衡版使用說明")
+        print("7. 💡 提取系統使用說明")
         print("8. 🚪 退出系統")
         
         choice = input("\n請選擇功能 (1-8): ").strip()
         
         if choice == "1":
             # 執行平衡版資料提取
-            print("\n⚖️ 準備執行平衡版資料提取...")
+            print("\n⚖️ 準備執行資料提取...")
             
             if not check_environment():
                 print("❌ 環境檢查失敗，無法執行提取")
@@ -537,7 +537,7 @@ def interactive_menu():
             # 執行平衡版提取
             results = run_balanced_extraction(docs_info)
             if results:
-                print(f"\n🎉 平衡版提取完成！生成了 {len(results)} 個結果文件")
+                print(f"\n🎉 提取完成！生成了 {len(results)} 個結果文件")
                 for pdf_path, (extractions, summary, excel_path) in results.items():
                     print(f"⚖️ {summary.company_name} - {summary.report_year}: {len(extractions)} 個平衡結果")
                     print(f"   文件: {Path(excel_path).name}")
