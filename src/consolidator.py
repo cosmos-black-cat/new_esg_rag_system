@@ -142,6 +142,39 @@ class ESGDataConsolidator:
         print(f"⚠️ 注意：檔名包含'無提取'的檔案將被自動排除")
         print(f"🏢 智能識別：同一公司的不同命名將自動統一")
     
+    def consolidate_all_results(self) -> str:
+        """彙整所有結果到一個Excel檔案，排除'無提取'檔案並標準化公司名稱"""
+        print("\n🚀 開始彙整所有ESG提取結果...")
+        print("=" * 60)
+        
+        # 1. 掃描並分析所有Excel檔案（排除'無提取'）
+        excel_files = self._scan_excel_files()
+        if not excel_files:
+            print("❌ 未找到任何有效的Excel結果檔案")
+            print("💡 提示：包含'無提取'的檔案已自動排除")
+            return None
+        
+        print(f"📄 找到 {len(excel_files)} 個有效Excel結果檔案（已排除'無提取'檔案）")
+        
+        # 2. 解析檔案信息
+        parsed_files = self._parse_file_info(excel_files)
+        print(f"✅ 成功解析 {len(parsed_files)} 個檔案")
+        
+        # 3. 載入所有資料
+        all_data = self._load_all_data(parsed_files)
+        print(f"📚 載入完成，共 {len(all_data)} 筆資料")
+        
+        # 4. 標準化公司名稱（新增步驟）
+        all_data = self._standardize_company_names(all_data)
+        
+        # 5. 生成彙整報告
+        output_path = self._create_consolidated_excel(all_data, parsed_files)
+        
+        print(f"✅ 彙整完成！")
+        print(f"📊 輸出檔案: {output_path}")
+        
+        return output_path
+    
     def _standardize_company_names(self, all_data: List[Dict]) -> List[Dict]:
         """標準化所有公司名稱，將相似的公司名稱統一"""
         if not all_data:
@@ -201,34 +234,6 @@ class ESGDataConsolidator:
         print(f"   ✅ 標準化完成: {len(unique_companies)} → {len(final_companies)} 個公司")
         
         return standardized_data
-        """彙整所有結果到一個Excel檔案，排除'無提取'檔案"""
-        print("\n🚀 開始彙整所有ESG提取結果...")
-        print("=" * 60)
-        
-        # 1. 掃描並分析所有Excel檔案（排除'無提取'）
-        excel_files = self._scan_excel_files()
-        if not excel_files:
-            print("❌ 未找到任何有效的Excel結果檔案")
-            print("💡 提示：包含'無提取'的檔案已自動排除")
-            return None
-        
-        print(f"📄 找到 {len(excel_files)} 個有效Excel結果檔案（已排除'無提取'檔案）")
-        
-        # 2. 解析檔案信息
-        parsed_files = self._parse_file_info(excel_files)
-        print(f"✅ 成功解析 {len(parsed_files)} 個檔案")
-        
-        # 3. 載入所有資料
-        all_data = self._load_all_data(parsed_files)
-        print(f"📚 載入完成，共 {len(all_data)} 筆資料")
-        
-        # 4. 生成彙整報告
-        output_path = self._create_consolidated_excel(all_data, parsed_files)
-        
-        print(f"✅ 彙整完成！")
-        print(f"📊 輸出檔案: {output_path}")
-        
-        return output_path
     
     def _scan_excel_files(self) -> List[Path]:
         """掃描所有Excel檔案，排除包含'無提取'的檔案"""
@@ -616,25 +621,6 @@ def consolidate_esg_results(results_path: str) -> str:
 # =============================================================================
 # 測試功能
 # =============================================================================
-
-def test_consolidation():
-    """測試彙整功能"""
-    print("🧪 測試ESG資料彙整功能")
-    
-    # 假設有一些測試檔案
-    test_results_path = "./test_results"
-    
-    try:
-        consolidator = ESGDataConsolidator(test_results_path)
-        result_path = consolidator.consolidate_all_results()
-        
-        if result_path:
-            print(f"✅ 測試成功: {result_path}")
-        else:
-            print("❌ 測試失敗")
-            
-    except Exception as e:
-        print(f"❌ 測試錯誤: {e}")
 
 def test_company_name_standardization():
     """測試公司名稱標準化功能"""
