@@ -71,10 +71,13 @@ class ProcessingSummary:
 # 關鍵字配置
 # =============================================================================
 
+# 在 esg_extractor.py 中的 KeywordConfig 類，只需要修改這個部分
+
 class KeywordConfig:
-    """ESG報告書關鍵字配置"""
+    """ESG報告書關鍵字配置 - 擴展版"""
     
     RECYCLED_PLASTIC_KEYWORDS = {
+        # 原有的再生塑膠關鍵字（保持不變）
         "high_relevance_continuous": [
             "再生塑膠", "再生塑料", "再生料", "再生PET", "再生PP",
             "回收塑膠", "回收塑料", "回收PP", "回收PET", 
@@ -102,6 +105,43 @@ class KeywordConfig:
         ]
     }
     
+    # 新增：循環經濟和能源相關關鍵字
+    CIRCULAR_ECONOMY_KEYWORDS = {
+        # 組1：比率和效率相關
+        "ratio_and_efficiency": [
+            "材料循環率", "材料可回收率", "再生能源使用率",
+            "單位經濟效益", "再生材料替代率", "碳排減量比率",
+            "再生塑膠使用比率"
+        ],
+        
+        # 組2：材料和能源使用量
+        "material_and_energy_usage": [
+            "再生材料使用量", "材料總使用量", "綠電憑證",
+            "太陽能電力", "購電協議", "再生能源",
+            "再生材料碳排減量", "再生塑膠成本", "再生塑膠的使用量",
+            "塑膠使用量", "材料使用量"
+        ],
+        
+        # 組3：流程和概念
+        "process_and_concepts": [
+            "分選辨視", "成本增加", "材料回收", "材質分離",
+            "碳排放", "單一材料"
+        ],
+        
+        # 組4：不連續關鍵字組合
+        "discontinuous_combinations": [
+            ("材料", "循環率"), ("材料", "可回收率"), ("再生能源", "使用率"),
+            ("經濟", "效益"), ("材料", "替代率"), ("碳排", "減量"),
+            ("再生塑膠", "使用比率"), ("再生材料", "使用量"),
+            ("材料", "總使用量"), ("綠電", "憑證"), ("太陽能", "電力"),
+            ("購電", "協議"), ("再生", "能源"), ("分選", "辨視"),
+            ("碳排", "減量"), ("塑膠", "成本"), ("成本", "增加"),
+            ("材質", "分離"), ("單一", "材料"), ("塑膠", "使用量"),
+            ("材料", "使用量")
+        ]
+    }
+    
+    # 原有的排除規則保持不變
     EXCLUSION_RULES = {
         "exclude_topics": [
             "職業災害", "工安", "安全事故", "職災",
@@ -124,6 +164,7 @@ class KeywordConfig:
         ]
     }
     
+    # 原有的塑膠指標保持不變
     PLASTIC_INDICATORS = {
         "plastic_materials": [
             "塑膠", "塑料", "聚酯", "PET", "PP", "聚合物",
@@ -140,16 +181,27 @@ class KeywordConfig:
     
     @classmethod
     def get_all_keywords(cls) -> List[Union[str, tuple]]:
-        """獲取所有關鍵字"""
+        """獲取所有關鍵字 - 包含新增的循環經濟關鍵字"""
         all_keywords = []
+        
+        # 原有的再生塑膠關鍵字
         all_keywords.extend(cls.RECYCLED_PLASTIC_KEYWORDS["high_relevance_continuous"])
         all_keywords.extend(cls.RECYCLED_PLASTIC_KEYWORDS["medium_relevance_continuous"])
         all_keywords.extend(cls.RECYCLED_PLASTIC_KEYWORDS["high_relevance_discontinuous"])
+        
+        # 新增的循環經濟關鍵字
+        all_keywords.extend(cls.CIRCULAR_ECONOMY_KEYWORDS["ratio_and_efficiency"])
+        all_keywords.extend(cls.CIRCULAR_ECONOMY_KEYWORDS["material_and_energy_usage"])
+        all_keywords.extend(cls.CIRCULAR_ECONOMY_KEYWORDS["process_and_concepts"])
+        all_keywords.extend(cls.CIRCULAR_ECONOMY_KEYWORDS["discontinuous_combinations"])
+        
         return all_keywords
 
 # =============================================================================
 # 匹配引擎
 # =============================================================================
+
+# 在 esg_extractor.py 中的 ESGMatcher 類，只需要更新 __init__ 方法中的匹配模式
 
 class ESGMatcher:
     """ESG數據匹配引擎"""
@@ -158,8 +210,9 @@ class ESGMatcher:
         self.config = KeywordConfig()
         self.max_distance = 300
         
-        # 數值匹配模式
+        # 擴展的數值匹配模式（增加新的單位和格式）
         self.number_patterns = [
+            # 原有的匹配模式
             r'\d+(?:\.\d+)?\s*億支',
             r'\d+(?:\.\d+)?\s*萬支',
             r'\d+(?:,\d{3})*(?:\.\d+)?\s*(?:萬|千)?噸',
@@ -168,385 +221,37 @@ class ESGMatcher:
             r'\d+(?:,\d{3})*(?:\.\d+)?\s*噸/年',
             r'\d+(?:,\d{3})*(?:\.\d+)?\s*噸/日',
             r'\d+(?:,\d{3})*(?:\.\d+)?\s*(?:件|個|批|台|套)',
+            
+            # 新增：能源和材料相關單位
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*(?:kW|MW|GW|千瓦|萬瓦)',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*(?:kWh|MWh|GWh|度)',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*張',  # 綠電憑證
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*億元',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*萬元',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*千元',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*元',
+            
+            # 新增：用量和使用量相關
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*立方米',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*m³',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*公升',
+            r'\d+(?:,\d{3})*(?:\.\d+)?\s*L',
         ]
         
-        # 百分比匹配模式
+        # 擴展的百分比匹配模式
         self.percentage_patterns = [
             r'\d+(?:\.\d+)?\s*%',
             r'\d+(?:\.\d+)?\s*％',
             r'百分之\d+(?:\.\d+)?',
+            
+            # 新增：比率相關表達
+            r'\d+(?:\.\d+)?\s*比率',
+            r'\d+(?:\.\d+)?\s*效率',
+            r'\d+(?:\.\d+)?\s*使用率',
+            r'\d+(?:\.\d+)?\s*循環率',
+            r'\d+(?:\.\d+)?\s*回收率',
+            r'\d+(?:\.\d+)?\s*替代率',
         ]
-    
-    def extract_keyword_value_pairs(self, text: str, keyword: Union[str, tuple]) -> List[Tuple[str, str, float, int]]:
-        """
-        提取關鍵字與數值的配對
-        返回: [(數值, 數值類型, 關聯度分數, 距離)]
-        """
-        text_lower = text.lower()
-        
-        # 1. 檢查關鍵字是否存在
-        keyword_match, keyword_confidence, _ = self._match_keyword(text, keyword)
-        if not keyword_match:
-            return []
-        
-        # 2. 找到關鍵字位置
-        keyword_positions = self._get_keyword_positions(text_lower, keyword)
-        if not keyword_positions:
-            return []
-        
-        # 3. 在關鍵字附近尋找數值
-        valid_pairs = []
-        
-        for kw_start, kw_end in keyword_positions:
-            # 搜索範圍
-            search_start = max(0, kw_start - 100)
-            search_end = min(len(text), kw_end + 100)
-            search_window = text[search_start:search_end]
-            
-            # 提取數值
-            numbers = self._extract_numbers_in_window(search_window)
-            percentages = self._extract_percentages_in_window(search_window)
-            
-            # 驗證數值關聯性
-            for number in numbers:
-                number_pos = search_window.find(number)
-                if number_pos != -1:
-                    actual_number_pos = search_start + number_pos
-                    distance = min(abs(actual_number_pos - kw_start), abs(actual_number_pos - kw_end))
-                    
-                    association_score = self._calculate_association(
-                        text, keyword, number, kw_start, kw_end, actual_number_pos
-                    )
-                    
-                    if association_score > 0.5 and distance <= 80:
-                        valid_pairs.append((number, 'number', association_score, distance))
-            
-            for percentage in percentages:
-                percentage_pos = search_window.find(percentage)
-                if percentage_pos != -1:
-                    actual_percentage_pos = search_start + percentage_pos
-                    distance = min(abs(actual_percentage_pos - kw_start), abs(actual_percentage_pos - kw_end))
-                    
-                    association_score = self._calculate_association(
-                        text, keyword, percentage, kw_start, kw_end, actual_percentage_pos
-                    )
-                    
-                    if association_score > 0.5 and distance <= 80:
-                        valid_pairs.append((percentage, 'percentage', association_score, distance))
-        
-        # 去重並排序
-        unique_pairs = []
-        seen_values = set()
-        
-        for value, value_type, score, distance in sorted(valid_pairs, key=lambda x: x[2], reverse=True):
-            if value not in seen_values:
-                seen_values.add(value)
-                unique_pairs.append((value, value_type, score, distance))
-        
-        return unique_pairs[:3]
-    
-    def comprehensive_relevance_check(self, text: str, keyword: Union[str, tuple]) -> Tuple[bool, float, str]:
-        """綜合相關性檢查"""
-        text_lower = text.lower()
-        
-        # 1. 排除檢查
-        if self._is_excluded_content(text_lower):
-            return False, 0.0, "明確無關內容"
-        
-        # 2. 關鍵字匹配
-        keyword_match, keyword_confidence, keyword_details = self._match_keyword(text, keyword)
-        if not keyword_match:
-            return False, 0.0, "關鍵字不匹配"
-        
-        # 3. 塑膠相關性檢查
-        plastic_relevance = self._check_plastic_relevance(text_lower)
-        if plastic_relevance < 0.3:
-            return False, 0.0, f"非塑膠相關內容: {plastic_relevance:.2f}"
-        
-        # 4. 計算綜合分數
-        relevance_score = self._calculate_relevance_score(text_lower)
-        
-        final_score = (
-            keyword_confidence * 0.3 + 
-            plastic_relevance * 0.3 + 
-            relevance_score * 0.4
-        )
-        
-        is_relevant = final_score > 0.55
-        
-        details = f"關鍵字:{keyword_confidence:.2f}, 塑膠相關:{plastic_relevance:.2f}, 相關性:{relevance_score:.2f}"
-        
-        return is_relevant, final_score, details
-    
-    # 輔助方法
-    def _match_keyword(self, text: str, keyword: Union[str, tuple]) -> Tuple[bool, float, str]:
-        """關鍵字匹配"""
-        text_lower = text.lower()
-        
-        if isinstance(keyword, str):
-            if keyword.lower() in text_lower:
-                return True, 1.0, f"精確匹配: {keyword}"
-            return False, 0.0, ""
-        
-        elif isinstance(keyword, tuple):
-            components = [comp.lower() for comp in keyword]
-            positions = []
-            
-            for comp in components:
-                pos = text_lower.find(comp)
-                if pos == -1:
-                    return False, 0.0, f"缺少組件: {comp}"
-                positions.append(pos)
-            
-            distance = max(positions) - min(positions)
-            
-            if distance <= 80:
-                return True, 0.9, f"近距離匹配({distance}字)"
-            elif distance <= 200:
-                return True, 0.8, f"中距離匹配({distance}字)"
-            elif distance <= self.max_distance:
-                return True, 0.6, f"遠距離匹配({distance}字)"
-            else:
-                return True, 0.4, f"極遠距離匹配({distance}字)"
-        
-        return False, 0.0, ""
-    
-    def _get_keyword_positions(self, text: str, keyword: Union[str, tuple]) -> List[Tuple[int, int]]:
-        """獲取關鍵字位置"""
-        positions = []
-        
-        if isinstance(keyword, str):
-            keyword_lower = keyword.lower()
-            start = 0
-            while True:
-                pos = text.find(keyword_lower, start)
-                if pos == -1:
-                    break
-                positions.append((pos, pos + len(keyword_lower)))
-                start = pos + 1
-        
-        elif isinstance(keyword, tuple):
-            components = [comp.lower() for comp in keyword]
-            component_positions = {}
-            
-            for comp in components:
-                comp_positions = []
-                start = 0
-                while True:
-                    pos = text.find(comp, start)
-                    if pos == -1:
-                        break
-                    comp_positions.append((pos, pos + len(comp)))
-                    start = pos + 1
-                component_positions[comp] = comp_positions
-            
-            # 找到所有組件都在合理距離內的組合
-            for comp1_pos in component_positions.get(components[0], []):
-                for comp2_pos in component_positions.get(components[1], []):
-                    distance = abs(comp1_pos[0] - comp2_pos[0])
-                    if distance <= self.max_distance:
-                        start_pos = min(comp1_pos[0], comp2_pos[0])
-                        end_pos = max(comp1_pos[1], comp2_pos[1])
-                        positions.append((start_pos, end_pos))
-        
-        return positions
-    
-    def _extract_numbers_in_window(self, window_text: str) -> List[str]:
-        """提取數值"""
-        numbers = []
-        for pattern in self.number_patterns:
-            matches = re.findall(pattern, window_text, re.IGNORECASE)
-            numbers.extend(matches)
-        return list(set(numbers))
-    
-    def _extract_percentages_in_window(self, window_text: str) -> List[str]:
-        """提取百分比"""
-        percentages = []
-        for pattern in self.percentage_patterns:
-            matches = re.findall(pattern, window_text, re.IGNORECASE)
-            percentages.extend(matches)
-        return list(set(percentages))
-    
-    def _calculate_association(self, text: str, keyword: Union[str, tuple], 
-                             value: str, kw_start: int, kw_end: int, value_pos: int) -> float:
-        """計算關鍵字與數值的關聯度"""
-        
-        # 距離因子
-        distance = min(abs(value_pos - kw_start), abs(value_pos - kw_end))
-        if distance <= 20:
-            distance_score = 1.0
-        elif distance <= 50:
-            distance_score = 0.8
-        elif distance <= 80:
-            distance_score = 0.6
-        else:
-            distance_score = 0.3
-        
-        # 上下文相關性
-        context_start = min(kw_start, value_pos) - 30
-        context_end = max(kw_end, value_pos + len(value)) + 30
-        context_start = max(0, context_start)
-        context_end = min(len(text), context_end)
-        context = text[context_start:context_end].lower()
-        
-        context_score = self._calculate_context_score(context)
-        
-        # 數值合理性
-        value_score = self._calculate_value_score(value, context)
-        
-        final_score = (
-            distance_score * 0.4 +
-            context_score * 0.35 + 
-            value_score * 0.25
-        )
-        
-        return final_score
-    
-    def _is_excluded_content(self, text: str) -> bool:
-        """檢查是否為排除內容"""
-        for topic in self.config.EXCLUSION_RULES["exclude_topics"]:
-            if topic in text:
-                return True
-        
-        for context in self.config.EXCLUSION_RULES["exclude_contexts"]:
-            if context in text:
-                return True
-        
-        return False
-    
-    def _check_plastic_relevance(self, text: str) -> float:
-        """檢查塑膠相關性"""
-        plastic_score = 0.0
-        recycling_score = 0.0
-        
-        plastic_count = 0
-        for indicator in self.config.PLASTIC_INDICATORS["plastic_materials"]:
-            if indicator in text:
-                plastic_count += 1
-        
-        plastic_score = min(plastic_count / 3.0, 1.0)
-        
-        recycling_count = 0
-        for indicator in self.config.PLASTIC_INDICATORS["recycling_specific"]:
-            if indicator in text:
-                recycling_count += 1
-        
-        recycling_score = min(recycling_count / 2.0, 1.0)
-        
-        if plastic_score > 0 and recycling_score > 0:
-            return (plastic_score + recycling_score) / 2.0
-        else:
-            return 0.0
-    
-    def _calculate_relevance_score(self, text: str) -> float:
-        """計算相關性分數"""
-        relevance_indicators = {
-            "plastic_materials": [
-                "塑膠", "塑料", "聚酯", "PET", "PP", "聚合物",
-                "樹脂", "粒子", "顆粒", "材料", "聚合物", "塑膠粒"
-            ],
-            "recycling_process": [
-                "回收", "再生", "循環", "再利用", "回收利用",
-                "造粒", "再製", "轉換", "處理", "循環經濟"
-            ],
-            "production_application": [
-                "生產", "製造", "產能", "產量", "使用", "應用",
-                "製成", "加工", "生產線", "工廠", "產品"
-            ],
-            "environmental_benefit": [
-                "減碳", "碳排放", "環保", "永續", "節能", "減排",
-                "碳足跡", "綠色", "低碳", "效益", "環境"
-            ]
-        }
-        
-        total_score = 0.0
-        
-        for category, indicators in relevance_indicators.items():
-            category_score = 0.0
-            for indicator in indicators:
-                if indicator in text:
-                    category_score += 1
-            
-            normalized_score = min(category_score / len(indicators), 1.0)
-            total_score += normalized_score * 0.25
-        
-        return total_score
-    
-    def _calculate_context_score(self, context: str) -> float:
-        """計算上下文分數"""
-        high_relevance_words = [
-            "回收", "再生", "循環", "製造", "生產", "產能", "使用",
-            "塑膠", "塑料", "聚酯", "材料", "寶特瓶", "減碳", "效益"
-        ]
-        
-        negative_words = [
-            "災害", "事故", "馬拉松", "賽事", "改善案", "案例",
-            "雨水", "節能", "隔熱", "鍋爐", "燃油"
-        ]
-        
-        score = 0.0
-        
-        for word in high_relevance_words:
-            if word in context:
-                score += 0.15
-        
-        for word in negative_words:
-            if word in context:
-                score -= 0.2
-        
-        return max(0.0, min(1.0, score))
-    
-    def _calculate_value_score(self, value: str, context: str) -> float:
-        """計算數值合理性分數"""
-        number_match = re.search(r'\d+(?:,\d{3})*(?:\.\d+)?', value)
-        if not number_match:
-            return 0.0
-        
-        try:
-            number_str = number_match.group().replace(',', '')
-            number = float(number_str)
-        except ValueError:
-            return 0.0
-        
-        if "億支" in value:
-            if 1 <= number <= 100:
-                return 1.0
-            elif 0.1 <= number <= 500:
-                return 0.7
-            else:
-                return 0.3
-        
-        elif "萬噸" in value or "千噸" in value:
-            if 0.1 <= number <= 50:
-                return 1.0
-            elif 0.01 <= number <= 100:
-                return 0.7
-            else:
-                return 0.3
-        
-        elif "噸" in value:
-            if 1 <= number <= 10000:
-                return 1.0
-            elif 0.1 <= number <= 50000:
-                return 0.7
-            else:
-                return 0.3
-        
-        elif "%" in value or "％" in value:
-            if 0 <= number <= 100:
-                return 1.0
-            else:
-                return 0.2
-        
-        elif "件" in value:
-            if 1 <= number <= 10000:
-                return 1.0
-            elif 1 <= number <= 100000:
-                return 0.7
-            else:
-                return 0.3
-        
-        return 0.5
 
 # =============================================================================
 # ESG提取器主類
