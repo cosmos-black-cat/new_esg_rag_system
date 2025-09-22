@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ESG報告書提取器 - 主程式 v1.0
-專注於ESG報告書中再生塑膠相關數據的提取和彙整
+ESG報告書提取器 - 主程式 v2.0
+支持增強關鍵字配置和Word文件輸出
 """
 
 import os
@@ -60,6 +60,15 @@ def check_environment():
             print(f"✅ 創建{name}: {path}")
         else:
             print(f"✅ {name}: {path}")
+    
+    # 檢查Word處理依賴
+    try:
+        import docx
+        print("✅ Word文檔處理依賴已安裝")
+    except ImportError:
+        print("⚠️ Word文檔處理依賴未安裝")
+        print("請運行: pip install python-docx")
+        return False
     
     return True
 
@@ -149,53 +158,20 @@ def run_preprocessing(pdf_files: list = None, force: bool = False) -> Optional[D
         import traceback
         traceback.print_exc()
         return None
-    
-# =============================================================================
-# 在 main.py 的核心功能函數部分添加（如果還沒有的話）
-# =============================================================================
 
-def run_filename_standardization() -> Optional[Dict[str, str]]:
-    """執行PDF檔名標準化"""
+def run_enhanced_extraction(docs_info: Dict, max_docs: int = None) -> Optional[Dict]:
+    """執行增強版ESG數據提取"""
     try:
-        from preprocess import standardize_pdf_filenames
+        from esg_extractor import EnhancedESGExtractor, DocumentInfo
         
-        print("\n📁 開始PDF檔名標準化...")
+        print("📊 初始化增強版ESG報告書提取器...")
+        print("🆕 新功能:")
+        print("   • 支持新的ESG關鍵字配置")
+        print("   • 自動識別股票代號")
+        print("   • 輸出Word文檔格式")
+        print("   • 提升提取準確性")
         
-        if not CONFIG_LOADED:
-            print("❌ 配置未載入")
-            return None
-        
-        # 檢查數據目錄
-        if not os.path.exists(DATA_PATH):
-            print(f"❌ 數據目錄不存在: {DATA_PATH}")
-            return None
-        
-        # 執行標準化
-        rename_mapping = standardize_pdf_filenames(DATA_PATH)
-        
-        if rename_mapping:
-            print(f"✅ 檔名標準化完成，共重命名 {len(rename_mapping)} 個檔案")
-            return rename_mapping
-        else:
-            print("ℹ️  所有檔案已符合標準格式，無需重命名")
-            return {}
-            
-    except ImportError as e:
-        print(f"❌ 無法載入標準化模組: {e}")
-        return None
-    except Exception as e:
-        print(f"❌ 檔名標準化失敗: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def run_extraction(docs_info: Dict, max_docs: int = None) -> Optional[Dict]:
-    """執行ESG數據提取"""
-    try:
-        from esg_extractor import ESGExtractor, DocumentInfo
-        
-        print("📊 初始化ESG報告書提取器...")
-        extractor = ESGExtractor(enable_llm=ENABLE_LLM_ENHANCEMENT)
+        extractor = EnhancedESGExtractor(enable_llm=ENABLE_LLM_ENHANCEMENT)
         
         # 使用配置中的最大文檔數
         if max_docs is None:
@@ -209,19 +185,40 @@ def run_extraction(docs_info: Dict, max_docs: int = None) -> Optional[Dict]:
                 company_name=metadata['company_name'],
                 report_year=metadata['report_year'],
                 pdf_name=info['pdf_name'],
-                db_path=info['db_path']
+                db_path=info['db_path'],
+                stock_code=""  # 將在處理過程中自動提取
             )
         
-        print("📊 開始ESG數據提取...")
+        print("📊 開始增強版ESG數據提取...")
         print(f"   最大處理文檔數: {max_docs}")
         print(f"   LLM增強: {'啟用' if ENABLE_LLM_ENHANCEMENT else '停用'}")
         
-        results = extractor.process_multiple_documents(document_infos, max_docs)
+        # 批量處理文檔
+        results = {}
+        
+        for pdf_path, doc_info in document_infos.items():
+            try:
+                print(f"\n📄 處理: {doc_info.company_name} - {doc_info.report_year}")
+                
+                extractions, summary, excel_path, word_path = extractor.process_single_document(doc_info, max_docs)
+                
+                results[pdf_path] = (extractions, summary, excel_path, word_path)
+                
+                print(f"✅ 完成: 生成 {len(extractions)} 個結果")
+                print(f"📊 Excel文件: {Path(excel_path).name}")
+                if word_path:
+                    print(f"📄 Word文件: {Path(word_path).name}")
+                
+            except Exception as e:
+                print(f"❌ 處理失敗 {doc_info.company_name}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
         
         return results
         
     except Exception as e:
-        print(f"❌ ESG數據提取失敗: {e}")
+        print(f"❌ 增強版ESG數據提取失敗: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -304,21 +301,26 @@ def show_latest_results():
             print("❌ 結果目錄不存在")
             return
         
-        # 查找Excel文件
+        # 查找Excel文件和Word文件
         excel_files = list(results_dir.glob("ESG*.xlsx"))
-        if not excel_files:
+        word_files = list(results_dir.glob("*.docx"))
+        
+        if not excel_files and not word_files:
             print("❌ 沒有找到結果文件")
             return
         
         # 按修改時間排序
-        excel_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        all_files = excel_files + word_files
+        all_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         
         print("📊 最新結果文件")
         print("=" * 50)
         
         # 分類顯示
-        consolidated_files = [f for f in excel_files if "彙整報告" in f.name]
-        extraction_files = [f for f in excel_files if "彙整報告" not in f.name]
+        consolidated_files = [f for f in all_files if "彙整報告" in f.name]
+        extraction_files = [f for f in all_files if "彙整報告" not in f.name]
+        word_files_filtered = [f for f in extraction_files if f.suffix == '.docx']
+        excel_files_filtered = [f for f in extraction_files if f.suffix == '.xlsx']
         
         if consolidated_files:
             print("\n📊 彙整報告:")
@@ -328,9 +330,17 @@ def show_latest_results():
                 print(f"   📄 {file.name}")
                 print(f"      🕒 {file_time.strftime('%Y-%m-%d %H:%M:%S')} | 📏 {file_size:.1f}KB")
         
-        if extraction_files:
-            print("\n📊 提取結果:")
-            for file in extraction_files[:5]:
+        if word_files_filtered:
+            print("\n📄 Word文檔:")
+            for file in word_files_filtered[:5]:
+                file_time = datetime.fromtimestamp(file.stat().st_mtime)
+                file_size = file.stat().st_size / 1024
+                print(f"   📄 {file.name}")
+                print(f"      🕒 {file_time.strftime('%Y-%m-%d %H:%M:%S')} | 📏 {file_size:.1f}KB")
+        
+        if excel_files_filtered:
+            print("\n📊 Excel結果:")
+            for file in excel_files_filtered[:5]:
                 file_time = datetime.fromtimestamp(file.stat().st_mtime)
                 file_size = file.stat().st_size / 1024
                 print(f"   📄 {file.name}")
@@ -338,9 +348,10 @@ def show_latest_results():
         
         # 統計信息
         print(f"\n📈 統計摘要:")
-        print(f"   總檔案數: {len(excel_files)}")
+        print(f"   總檔案數: {len(all_files)}")
         print(f"   彙整報告: {len(consolidated_files)} 個")
-        print(f"   提取結果: {len(extraction_files)} 個")
+        print(f"   Excel結果: {len(excel_files_filtered)} 個")
+        print(f"   Word文檔: {len(word_files_filtered)} 個")
             
     except Exception as e:
         print(f"❌ 查看結果失敗: {e}")
@@ -356,7 +367,7 @@ def show_system_info():
         CHUNK_SIZE, SEARCH_K, CONFIDENCE_THRESHOLD
     )
     
-    print("📋 ESG報告書提取器配置信息")
+    print("📋 ESG報告書提取器配置信息 v2.0")
     print("=" * 50)
     print(f"🤖 Gemini模型: {GEMINI_MODEL}")
     print(f"🧠 Embedding模型: {EMBEDDING_MODEL}")
@@ -368,42 +379,67 @@ def show_system_info():
     print(f"📏 信心分數閾值: {CONFIDENCE_THRESHOLD}")
     print(f"📄 最大處理文檔數: {MAX_DOCS_PER_RUN}")
     print(f"🤖 LLM增強: {'啟用' if ENABLE_LLM_ENHANCEMENT else '停用'}")
+    
+    print(f"\n🆕 增強版新功能:")
+    print(f"   • 新的關鍵字配置（材料循環率、再生能源使用率等）")
+    print(f"   • 自動股票代號識別")
+    print(f"   • Word文檔輸出（.docx格式）")
+    print(f"   • 提升的提取準確性")
 
 def show_usage_guide():
     """顯示使用說明"""
-    print("\n📚 ESG報告書提取器使用說明")
+    print("\n📚 ESG報告書提取器使用說明 v2.0")
     print("=" * 60)
     print("""
 🎯 主要功能：
-   • 自動提取ESG報告中的再生塑膠相關數據
-   • 支援批量處理多份報告
+   • 自動提取ESG報告中的再生材料和循環經濟相關數據
+   • 支援新的關鍵字類型（比率類、數量類、技術類）
+   • 自動識別公司股票代號
+   • 批量處理多份報告
    • 智能識別關鍵數值和相關描述
    • 多公司多年度結果彙整分析
 
 📋 處理流程：
    1. 將ESG報告PDF放入data目錄
    2. 執行功能1進行數據提取
-   3. 執行功能2生成彙整報告
+   3. 執行功能3生成彙整報告
    4. 查看results目錄中的結果檔案
+
+🆕 新增功能：
+   • Word文檔輸出：格式為{股票代號}_{公司名稱}_{年度}_提取統整.docx
+   • 新關鍵字支持：材料循環率、再生能源使用率、綠電憑證等
+   • 自動股票代號識別：支援台股代號格式
+   • 增強準確性：更精確的關鍵字-數值關聯性分析
 
 🔧 核心特色：
    • 精確的關鍵字與數值關聯性分析
    • 智能排除無關內容（職業災害、賽事等）
    • 頁面級去重確保資料品質
+   • 動態信心分數閾值調整
    • 自動公司名稱標準化
-   • 專業的Excel報表輸出
+   • 雙格式輸出（Excel + Word）
 
-📊 輸出內容：
-   • 再生塑膠相關數值數據
-   • 回收產能和使用量
-   • 環保效益和減碳資料
-   • 循環經濟相關指標
+📊 新增提取內容：
+   • 材料循環率、材料可回收率
+   • 再生能源使用率、綠電憑證數量
+   • 再生材料使用量、碳排減量數據
+   • 分選辨視技術、單一材料處理
+   • 購電協議、太陽能電力相關數據
+
+📄 Word文檔格式：
+   頁碼：第X頁
+   關鍵字：[關鍵字名稱]
+   數值：[提取的數值和單位]
+   信心分數：[0.000-1.000]
+   整個段落內容：[完整段落內容]
 
 ⚡ 快速開始：
    1. 設置API Key（在.env檔案中）
-   2. 放入PDF檔案到data目錄
-   3. 執行功能1提取數據
-   4. 執行功能2彙整結果
+   2. 安裝新依賴：pip install python-docx
+   3. 放入PDF檔案到data目錄
+   4. 執行功能1進行增強提取
+   5. 執行功能3彙整結果
+   6. 查看Excel和Word雙格式輸出
 """)
 
 # =============================================================================
@@ -414,23 +450,23 @@ def interactive_menu():
     """互動式主選單"""
     while True:
         print("\n" + "📊" * 20)
-        print("🏢 ESG報告書提取器 v1.0")
-        print("專業提取ESG報告中的再生塑膠相關數據")
+        print("🏢 ESG報告書提取器 v2.0 (增強版)")
+        print("專業提取ESG報告中的再生材料和循環經濟數據")
+        print("🆕 新增：股票代號識別 + Word文檔輸出")
         print("📊" * 20)
-        print("1. 📊 執行ESG數據提取（主要功能）")
-        print("2. 📁 標準化PDF檔名")
-        print("3. 🔄 重新預處理PDF")
-        print("4. 🔗 彙整多公司結果")
-        print("5. 📋 查看最新結果")
-        print("6. ⚙️  顯示系統信息")
-        print("7. 💡 使用說明")
-        print("8. 🚪 退出系統")
+        print("1. 📊 執行增強版ESG數據提取（主要功能）")
+        print("2. 🔄 重新預處理PDF")
+        print("3. 🔗 彙整多公司結果")
+        print("4. 📋 查看最新結果")
+        print("5. ⚙️  顯示系統信息")
+        print("6. 💡 使用說明")
+        print("7. 🚪 退出系統")
         
-        choice = input("\n請選擇功能 (1-8): ").strip()
+        choice = input("\n請選擇功能 (1-7): ").strip()
         
         if choice == "1":
-            # 執行ESG數據提取
-            print("\n📊 準備執行ESG數據提取...")
+            # 執行增強版ESG數據提取
+            print("\n📊 準備執行增強版ESG數據提取...")
             
             if not check_environment():
                 print("❌ 環境檢查失敗，無法執行提取")
@@ -447,13 +483,23 @@ def interactive_menu():
                 print("❌ 預處理失敗，無法執行提取")
                 continue
             
-            # 執行提取
-            results = run_extraction(docs_info)
+            # 執行增強版提取
+            results = run_enhanced_extraction(docs_info)
             if results:
-                print(f"\n🎉 提取完成！生成了 {len(results)} 個結果文件")
-                for pdf_path, (extractions, summary, excel_path) in results.items():
-                    print(f"📊 {summary.company_name} - {summary.report_year}: {len(extractions)} 個結果")
-                    print(f"   文件: {Path(excel_path).name}")
+                print(f"\n🎉 增強版提取完成！生成了 {len(results)} 個結果文件")
+                
+                excel_count = 0
+                word_count = 0
+                
+                for pdf_path, (extractions, summary, excel_path, word_path) in results.items():
+                    print(f"📊 {summary.company_name} ({summary.stock_code}) - {summary.report_year}: {len(extractions)} 個結果")
+                    print(f"   📄 Excel: {Path(excel_path).name}")
+                    if word_path:
+                        print(f"   📄 Word: {Path(word_path).name}")
+                        word_count += 1
+                    excel_count += 1
+                
+                print(f"\n📈 總計輸出: {excel_count} 個Excel文件, {word_count} 個Word文件")
                 
                 # 詢問是否立即彙整
                 if len(results) > 1:
@@ -462,32 +508,8 @@ def interactive_menu():
                         result_path = run_consolidation()
                         if result_path:
                             print(f"🔗 彙整完成: {Path(result_path).name}")
-        
-        elif choice == "2":
-            # 標準化PDF檔名
-            print("\n📁 準備標準化PDF檔名...")
             
-            rename_mapping = run_filename_standardization()
-            if rename_mapping is not None:
-                if rename_mapping:
-                    print(f"\n🎉 檔名標準化完成！")
-                    print(f"📁 重命名了 {len(rename_mapping)} 個檔案")
-                    
-                    # 詢問是否立即執行數據提取
-                    extract_now = input("\n檔名已標準化，是否立即執行數據提取？(y/n): ").strip().lower()
-                    if extract_now == 'y':
-                        # 重新找到PDF文件（因為檔名已改變）
-                        has_pdfs, pdf_files = find_pdf_files()
-                        if has_pdfs:
-                            docs_info = run_preprocessing(pdf_files)
-                            if docs_info:
-                                results = run_extraction(docs_info)
-                                if results:
-                                    print(f"🎉 提取完成！生成了 {len(results)} 個結果文件")
-                else:
-                    print("✅ 所有檔案檔名已符合標準")
-        
-        elif choice == "3":
+        elif choice == "2":
             # 重新預處理PDF
             print("\n🔄 重新預處理PDF...")
             
@@ -505,7 +527,7 @@ def interactive_menu():
                 if docs_info:
                     print("✅ 預處理完成，現在可以執行數據提取")
             
-        elif choice == "4":
+        elif choice == "3":
             # 彙整多公司結果
             print("\n🔗 準備彙整多公司結果...")
             
@@ -518,38 +540,37 @@ def interactive_menu():
                 print("❌ 彙整功能執行失敗")
                 print("💡 請確保已執行過資料提取功能")
             
-        elif choice == "5":
+        elif choice == "4":
             # 查看最新結果
             show_latest_results()
             
-        elif choice == "6":
+        elif choice == "5":
             # 顯示系統信息
             show_system_info()
             
-        elif choice == "7":
+        elif choice == "6":
             # 使用說明
             show_usage_guide()
             
-        elif choice == "8":
+        elif choice == "7":
             # 退出
-            print("👋 感謝使用ESG報告書提取器！")
+            print("👋 感謝使用ESG報告書提取器 v2.0！")
             break
             
         else:
-            print("❌ 無效選擇，請輸入1-8之間的數字")
+            print("❌ 無效選擇，請輸入1-7之間的數字")
 
 def command_line_mode():
     """命令行模式"""
     parser = argparse.ArgumentParser(
-        description="ESG報告書提取器 v1.0 - 專業提取再生塑膠相關數據",
+        description="ESG報告書提取器 v2.0 - 增強版，支持新關鍵字和Word輸出",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用範例:
   python main.py                      # 互動模式
   python main.py --auto               # 自動執行完整流程
-  python main.py --standardize        # 標準化PDF檔名
   python main.py --preprocess         # 僅預處理
-  python main.py --extract            # 僅數據提取
+  python main.py --extract            # 僅數據提取（增強版）
   python main.py --consolidate        # 僅彙整功能
   python main.py --force              # 強制重新預處理
   python main.py --results            # 查看結果
@@ -557,9 +578,8 @@ def command_line_mode():
     )
     
     parser.add_argument("--auto", action="store_true", help="自動執行完整流程")
-    parser.add_argument("--standardize", action="store_true", help="標準化PDF檔名")
     parser.add_argument("--preprocess", action="store_true", help="預處理所有PDF文件")
-    parser.add_argument("--extract", action="store_true", help="執行ESG數據提取")
+    parser.add_argument("--extract", action="store_true", help="執行增強版ESG數據提取")
     parser.add_argument("--consolidate", action="store_true", help="執行彙整功能")
     parser.add_argument("--force", action="store_true", help="強制重新預處理")
     parser.add_argument("--results", action="store_true", help="查看最新結果")
@@ -570,7 +590,7 @@ def command_line_mode():
     # 根據參數執行對應功能
     if args.auto:
         # 自動執行完整流程
-        print("📊 自動執行模式")
+        print("📊 增強版自動執行模式")
         if not check_environment():
             sys.exit(1)
         
@@ -583,10 +603,12 @@ def command_line_mode():
         if not docs_info:
             sys.exit(1)
         
-        print("執行ESG數據提取...")
-        results = run_extraction(docs_info, args.max_docs)
+        print("執行增強版ESG數據提取...")
+        results = run_enhanced_extraction(docs_info, args.max_docs)
         if results:
-            print(f"✅ 提取完成！生成了 {len(results)} 個結果文件")
+            excel_count = sum(1 for _ in results)
+            word_count = sum(1 for _, (_, _, _, word_path) in results.items() if word_path)
+            print(f"✅ 增強版提取完成！生成了 {excel_count} 個Excel文件和 {word_count} 個Word文件")
             
             # 自動執行彙整
             if len(results) > 1:
@@ -594,18 +616,6 @@ def command_line_mode():
                 result_path = run_consolidation()
                 if result_path:
                     print(f"🔗 彙整完成: {Path(result_path).name}")
-        else:
-            sys.exit(1)
-    
-    elif args.standardize:
-        # 標準化PDF檔名
-        print("📁 檔名標準化模式")
-        rename_mapping = run_filename_standardization()
-        if rename_mapping is not None:
-            if rename_mapping:
-                print(f"✅ 檔名標準化完成，共重命名 {len(rename_mapping)} 個檔案")
-            else:
-                print("✅ 所有檔案檔名已符合標準")
         else:
             sys.exit(1)
             
@@ -630,7 +640,7 @@ def command_line_mode():
             print("❌ 需要先執行預處理")
             sys.exit(1)
         
-        results = run_extraction(docs_info, args.max_docs)
+        results = run_enhanced_extraction(docs_info, args.max_docs)
         if not results:
             sys.exit(1)
     
@@ -652,8 +662,9 @@ def command_line_mode():
 
 def main():
     """主函數"""
-    print("📊 ESG報告書提取器 v1.0")
-    print("專業提取ESG報告中的再生塑膠相關數據")
+    print("📊 ESG報告書提取器 v2.0 (增強版)")
+    print("專業提取ESG報告中的再生材料和循環經濟數據")
+    print("🆕 新功能：新關鍵字配置 + 股票代號識別 + Word輸出")
     print("=" * 60)
     
     # 根據命令行參數決定運行模式
