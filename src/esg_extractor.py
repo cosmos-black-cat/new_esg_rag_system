@@ -642,10 +642,10 @@ class ESGWordExporter:
         
         # 生成Word檔案名
         if stock_code:
-            word_filename = f"{stock_code}_{short_company_name}_{doc_info.report_year}_提取統整.docx"
+            word_filename = f"提取統整_{stock_code}_{short_company_name}_{doc_info.report_year}.docx"
         else:
             company_safe = re.sub(r'[^\w\s-]', '', short_company_name).strip()
-            word_filename = f"{company_safe}_{doc_info.report_year}_提取統整.docx"
+            word_filename = f"提取統整_{company_safe}_{doc_info.report_year}.docx"
         
         word_path = os.path.join(RESULTS_PATH, word_filename)
         
@@ -1310,7 +1310,7 @@ class EnhancedESGExtractor:
                 output_filename = f"無提取_{stock_code}_{short_company_name}_{doc_info.report_year}.xlsx"
                 status_message = "無提取結果"
             else:
-                output_filename = f"{stock_code}_{short_company_name}_{doc_info.report_year}.xlsx"
+                output_filename = f"提取結果_{stock_code}_{short_company_name}_{doc_info.report_year}.xlsx"
                 status_message = f"提取結果: {len(extractions)} 項"
         else:
             company_safe = re.sub(r'[^\w\s-]', '', short_company_name).strip()
@@ -1318,7 +1318,7 @@ class EnhancedESGExtractor:
                 output_filename = f"無提取_{company_safe}_{doc_info.report_year}.xlsx"
                 status_message = "無提取結果"
             else:
-                output_filename = f"{company_safe}_{doc_info.report_year}.xlsx"
+                output_filename = f"提取結果_{company_safe}_{doc_info.report_year}.xlsx"
                 status_message = f"提取結果: {len(extractions)} 項"
         
         output_path = os.path.join(RESULTS_PATH, output_filename)
