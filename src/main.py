@@ -249,85 +249,44 @@ class ESGFileNormalizer:
         
         return success_count > 0
 
-def run_filename_standardization() -> bool:
-    """執行檔案名稱標準化"""
-    print("\n📝 ESG報告書檔案名稱標準化")
-    print("=" * 50)
-    
-    if not CONFIG_LOADED:
-        print("❌ 配置未載入")
-        return False
-    
-    normalizer = ESGFileNormalizer()
-    
-    # 掃描PDF檔案
-    pdf_files = normalizer.scan_pdf_files()
-    
-    if not pdf_files:
-        print(f"❌ 在 {DATA_PATH} 目錄中找不到PDF檔案")
-        return False
-    
-    print(f"📄 找到 {len(pdf_files)} 個PDF檔案")
-    
-    # 預覽重命名計劃
-    renaming_plan = normalizer.preview_renaming(pdf_files)
-    
-    # 顯示重命名計劃
-    print("\n📋 重命名計劃預覽:")
-    print("-" * 80)
-    
-    needs_rename_count = 0
-    conflict_count = 0
-    
-    for item in renaming_plan:
-        if item['needs_rename']:
-            needs_rename_count += 1
-            status = "⚠️ 衝突" if item['has_conflict'] else "✅ 可重命名"
-            if item['has_conflict']:
-                conflict_count += 1
-                
-            print(f"{status}")
-            print(f"   原檔名: {item['original_name']}")
-            print(f"   新檔名: {item['new_name']}")
-            print(f"   公司: {item['analysis']['company_name']}")
-            print(f"   年度: {item['analysis']['report_year']}")
-            print(f"   信心度: {item['analysis']['confidence']}")
-            print()
+def run_filename_standardization() -> Optional[Dict[str, str]]:
+    """執行PDF檔名標準化"""
+    try:
+        # 直接從 preprocess 模組導入標準化函數
+        from preprocess import standardize_pdf_filenames
+        
+        print("\n📁 開始PDF檔名標準化...")
+        print("🎯 使用智能檔名分析 + PDF內容提取雙重策略")
+        print("📋 支援台灣上市櫃公司代號識別")
+        
+        if not CONFIG_LOADED:
+            print("❌ 配置未載入")
+            return None
+        
+        # 檢查數據目錄
+        if not os.path.exists(DATA_PATH):
+            print(f"❌ 數據目錄不存在: {DATA_PATH}")
+            return None
+        
+        # 執行標準化（調用 preprocess.py 的函數）
+        rename_mapping = standardize_pdf_filenames(DATA_PATH)
+        
+        if rename_mapping:
+            print(f"✅ 檔名標準化完成，共重命名 {len(rename_mapping)} 個檔案")
+            return rename_mapping
         else:
-            print(f"✅ 無需重命名: {item['original_name']}")
-    
-    if needs_rename_count == 0:
-        print("🎉 所有檔案名稱已符合標準！")
-        return True
-    
-    # 顯示統計
-    print(f"📊 統計摘要:")
-    print(f"   需要重命名: {needs_rename_count} 個")
-    print(f"   檔名衝突: {conflict_count} 個")
-    print(f"   無需處理: {len(pdf_files) - needs_rename_count} 個")
-    
-    if conflict_count > 0:
-        print(f"\n⚠️ 注意: {conflict_count} 個檔案存在檔名衝突，將自動添加數字後綴")
-    
-    # 詢問確認
-    print(f"\n標準化格式: 公司名稱_年度_ESG報告書.pdf")
-    create_backup = input("是否創建備份檔案？(建議選擇 y) (y/n): ").strip().lower() == 'y'
-    confirm = input("確認執行重命名嗎？(y/n): ").strip().lower()
-    
-    if confirm != 'y':
-        print("❌ 用戶取消操作")
-        return False
-    
-    # 執行重命名
-    success = normalizer.execute_renaming(renaming_plan, create_backup)
-    
-    if success:
-        print("\n🎉 檔案名稱標準化完成！")
-        print("💡 提示: 標準化後的檔名將有利於後續的數據提取和管理")
-        return True
-    else:
-        print("\n❌ 檔案名稱標準化失敗")
-        return False
+            print("ℹ️  所有檔案已符合標準格式，無需重命名")
+            return {}
+            
+    except ImportError as e:
+        print(f"❌ 無法載入標準化模組: {e}")
+        print("💡 請確保 preprocess.py 文件存在且包含 standardize_pdf_filenames 函數")
+        return None
+    except Exception as e:
+        print(f"❌ 檔名標準化失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 # =============================================================================
 # 系統檢查函數（保持不變）
@@ -707,15 +666,14 @@ def show_usage_guide():
 # =============================================================================
 
 def interactive_menu():
-    """互動式主選單 - 增強版"""
+    """互動式主選單"""
     while True:
         print("\n" + "📊" * 20)
-        print("🏢 ESG報告書提取器 v2.0 增強版")
-        print("專業提取ESG報告中的再生塑膠和永續材料相關數據")
-        print("🆕 新增：擴展關鍵字、提高準確度、Word文檔輸出")
+        print("🏢 ESG報告書提取器 v1.0")
+        print("專業提取ESG報告中的再生塑膠相關數據")
         print("📊" * 20)
-        print("1. 📊 執行增強版ESG數據提取（主要功能）")
-        print("2. 📝 標準化ESG報告書名稱")
+        print("1. 📊 執行ESG數據提取（主要功能）")
+        print("2. 📁 標準化PDF檔名")  # 重命名功能
         print("3. 🔄 重新預處理PDF")
         print("4. 🔗 彙整多公司結果")
         print("5. 📋 查看最新結果")
@@ -726,9 +684,8 @@ def interactive_menu():
         choice = input("\n請選擇功能 (1-8): ").strip()
         
         if choice == "1":
-            # 執行增強版ESG數據提取
-            print("\n📊 準備執行增強版ESG數據提取...")
-            print("🔧 增強功能：擴展關鍵字、提高準確度、Word文檔輸出")
+            # 執行ESG數據提取 (保持原有邏輯)
+            print("\n📊 準備執行ESG數據提取...")
             
             if not check_environment():
                 print("❌ 環境檢查失敗，無法執行提取")
@@ -749,10 +706,9 @@ def interactive_menu():
             results = run_extraction(docs_info)
             if results:
                 print(f"\n🎉 提取完成！生成了 {len(results)} 個結果文件")
-                for pdf_path, (extractions, summary, excel_path, word_path) in results.items():
+                for pdf_path, (extractions, summary, excel_path) in results.items():
                     print(f"📊 {summary.company_name} - {summary.report_year}: {len(extractions)} 個結果")
-                    print(f"   📄 Excel: {Path(excel_path).name}")
-                    print(f"   📝 Word: {Path(word_path).name}")
+                    print(f"   文件: {Path(excel_path).name}")
                 
                 # 詢問是否立即彙整
                 if len(results) > 1:
@@ -761,25 +717,33 @@ def interactive_menu():
                         result_path = run_consolidation()
                         if result_path:
                             print(f"🔗 彙整完成: {Path(result_path).name}")
-            
+        
         elif choice == "2":
-            # 標準化ESG報告書名稱
-            print("\n📝 準備標準化ESG報告書名稱...")
+            # 📁 標準化PDF檔名 (新的重命名功能)
+            print("\n📁 準備標準化PDF檔名...")
             
-            if not check_environment():
-                print("❌ 環境檢查失敗，無法執行標準化")
-                continue
-            
-            # 執行檔案名稱標準化
-            success = run_filename_standardization()
-            
-            if success:
-                print("\n💡 建議接下來執行功能1進行數據提取")
-            else:
-                print("❌ 檔案名稱標準化失敗")
-            
+            rename_mapping = run_filename_standardization()
+            if rename_mapping is not None:
+                if rename_mapping:
+                    print(f"\n🎉 檔名標準化完成！")
+                    print(f"📁 重命名了 {len(rename_mapping)} 個檔案")
+                    
+                    # 詢問是否立即執行數據提取
+                    extract_now = input("\n檔名已標準化，是否立即執行數據提取？(y/n): ").strip().lower()
+                    if extract_now == 'y':
+                        # 重新找到PDF文件（因為檔名已改變）
+                        has_pdfs, pdf_files = find_pdf_files()
+                        if has_pdfs:
+                            docs_info = run_preprocessing(pdf_files)
+                            if docs_info:
+                                results = run_extraction(docs_info)
+                                if results:
+                                    print(f"🎉 提取完成！生成了 {len(results)} 個結果文件")
+                else:
+                    print("✅ 所有檔案檔名已符合標準")
+        
         elif choice == "3":
-            # 重新預處理PDF
+            # 重新預處理PDF (原來的選項2)
             print("\n🔄 重新預處理PDF...")
             
             has_pdfs, pdf_files = find_pdf_files()
@@ -797,7 +761,7 @@ def interactive_menu():
                     print("✅ 預處理完成，現在可以執行數據提取")
             
         elif choice == "4":
-            # 彙整多公司結果
+            # 彙整多公司結果 (原來的選項3)
             print("\n🔗 準備彙整多公司結果...")
             
             result_path = run_consolidation()
@@ -810,143 +774,24 @@ def interactive_menu():
                 print("💡 請確保已執行過資料提取功能")
             
         elif choice == "5":
-            # 查看最新結果
+            # 查看最新結果 (原來的選項4)
             show_latest_results()
             
         elif choice == "6":
-            # 顯示系統信息
+            # 顯示系統信息 (原來的選項5)
             show_system_info()
             
         elif choice == "7":
-            # 使用說明
+            # 使用說明 (原來的選項6)
             show_usage_guide()
             
         elif choice == "8":
-            # 退出
-            print("👋 感謝使用ESG報告書提取器 v2.0 增強版！")
+            # 退出系統 (原來的選項7)
+            print("👋 感謝使用ESG報告書提取器！")
             break
             
         else:
             print("❌ 無效選擇，請輸入1-8之間的數字")
-
-def command_line_mode():
-    """命令行模式"""
-    parser = argparse.ArgumentParser(
-        description="ESG報告書提取器 v2.0 增強版 - 專業提取再生塑膠和永續材料相關數據",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-使用範例:
-  python main.py                      # 互動模式
-  python main.py --auto               # 自動執行完整流程
-  python main.py --preprocess         # 僅預處理
-  python main.py --extract            # 僅數據提取
-  python main.py --consolidate        # 僅彙整功能
-  python main.py --normalize          # 僅標準化檔名
-  python main.py --force              # 強制重新預處理
-  python main.py --results            # 查看結果
-
-v2.0 新功能:
-  • 擴展關鍵字配置（材料循環率、再生能源使用率等）
-  • 提高提取準確度（更嚴格的相關性檢查）
-  • Word文檔輸出（格式化的提取統整報告）
-  • 增強的排除規則（避免職災、賽事等無關內容）
-        """
-    )
-    
-    parser.add_argument("--auto", action="store_true", help="自動執行完整流程")
-    parser.add_argument("--preprocess", action="store_true", help="預處理所有PDF文件")
-    parser.add_argument("--extract", action="store_true", help="執行增強版ESG數據提取")
-    parser.add_argument("--consolidate", action="store_true", help="執行彙整功能")
-    parser.add_argument("--normalize", action="store_true", help="標準化檔案名稱")
-    parser.add_argument("--force", action="store_true", help="強制重新預處理")
-    parser.add_argument("--results", action="store_true", help="查看最新結果")
-    parser.add_argument("--max-docs", type=int, default=None, help="最大處理文檔數")
-    
-    args = parser.parse_args()
-    
-    # 根據參數執行對應功能
-    if args.normalize:
-        # 僅標準化檔名
-        print("📝 檔案名稱標準化模式")
-        success = run_filename_standardization()
-        if not success:
-            sys.exit(1)
-            
-    elif args.auto:
-        # 自動執行完整流程
-        print("📊 自動執行模式 (v2.0 增強版)")
-        if not check_environment():
-            sys.exit(1)
-        
-        has_pdfs, pdf_files = find_pdf_files()
-        if not has_pdfs:
-            sys.exit(1)
-        
-        print("執行預處理...")
-        docs_info = run_preprocessing(pdf_files, force=args.force)
-        if not docs_info:
-            sys.exit(1)
-        
-        print("執行增強版ESG數據提取...")
-        results = run_extraction(docs_info, args.max_docs)
-        if results:
-            print(f"✅ 提取完成！生成了 {len(results)} 個結果文件")
-            
-            # 顯示輸出文件統計
-            excel_count = len(results)
-            word_count = len(results)
-            print(f"📄 Excel文件: {excel_count} 個")
-            print(f"📝 Word文件: {word_count} 個")
-            
-            # 自動執行彙整
-            if len(results) > 1:
-                print("\n執行彙整功能...")
-                result_path = run_consolidation()
-                if result_path:
-                    print(f"🔗 彙整完成: {Path(result_path).name}")
-        else:
-            sys.exit(1)
-            
-    elif args.preprocess:
-        has_pdfs, pdf_files = find_pdf_files()
-        if not has_pdfs:
-            sys.exit(1)
-        
-        docs_info = run_preprocessing(pdf_files, force=args.force)
-        if docs_info:
-            print("✅ 預處理完成")
-        else:
-            sys.exit(1)
-            
-    elif args.extract:
-        has_pdfs, pdf_files = find_pdf_files()
-        if not has_pdfs:
-            sys.exit(1)
-        
-        docs_info = run_preprocessing(pdf_files, force=False)
-        if not docs_info:
-            print("❌ 需要先執行預處理")
-            sys.exit(1)
-        
-        results = run_extraction(docs_info, args.max_docs)
-        if not results:
-            sys.exit(1)
-    
-    elif args.consolidate:
-        # 僅執行彙整
-        print("🔗 彙整功能模式")
-        result_path = run_consolidation()
-        if result_path:
-            print(f"✅ 彙整完成: {Path(result_path).name}")
-        else:
-            sys.exit(1)
-            
-    elif args.results:
-        show_latest_results()
-        
-    else:
-        # 沒有參數，顯示幫助
-        parser.print_help()
 
 def main():
     """主函數"""

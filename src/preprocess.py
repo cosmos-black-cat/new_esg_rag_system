@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ESG報告書預處理模組 v1.0
-處理PDF文件並建立向量資料庫
+處理PDF文件、建立向量資料庫、標準化檔名
 """
 
 import os
@@ -15,8 +15,131 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from tqdm import tqdm
+
 sys.path.append(str(Path(__file__).parent))
 from config import *
+
+# =============================================================================
+# 台灣上市櫃公司代號映射表
+# =============================================================================
+
+COMPLETE_COMPANY_MAPPING = {
+    # 13開頭塑膠工業
+    "台塑": ("1301", "台塑"),
+    "台灣塑膠": ("1301", "台塑"),
+    "台灣塑膠工業": ("1301", "台塑"),
+    "台塑工業": ("1301", "台塑"),
+    "台塑集團": ("1301", "台塑"),
+    
+    "南亞": ("1303", "南亞"),
+    "南亞塑膠": ("1303", "南亞"),
+    "南亞塑膠工業": ("1303", "南亞"),
+    "南亞公司": ("1303", "南亞"),
+    
+    "台聚": ("1304", "台聚"),
+    "台灣聚合": ("1304", "台聚"),
+    "台灣聚合化學": ("1304", "台聚"),
+    
+    "華夏": ("1305", "華夏"),
+    "華夏海灣": ("1305", "華夏"),
+    "華夏海灣塑膠": ("1305", "華夏"),
+    
+    "三芳": ("1307", "三芳"),
+    "三芳化學": ("1307", "三芳"),
+    "三芳化學工業": ("1307", "三芳"),
+    "三芳化工": ("1307", "三芳"),
+    
+    "亞聚": ("1308", "亞聚"),
+    "亞洲聚合": ("1308", "亞聚"),
+    
+    "台達化": ("1309", "台達化"),
+    "台灣達化": ("1309", "台達化"),
+    
+    "台苯": ("1310", "台苯"),
+    "台灣苯乙烯": ("1310", "台苯"),
+    
+    "國喬": ("1312", "國喬"),
+    "國喬石化": ("1312", "國喬"),
+    "國橋": ("1312", "國喬"),
+    
+    "國喬特": ("1312A", "國喬特"),
+    
+    "聯成": ("1313", "聯成"),
+    "聯成化學": ("1313", "聯成"),
+    "聯成化科": ("1313", "聯成"),
+    
+    "中石化": ("1314", "中石化"),
+    "中國石油化學": ("1314", "中石化"),
+    "鼎越": ("1314", "中石化"),
+    "鼎越開發": ("1314", "中石化"),
+    
+    "達新": ("1315", "達新"),
+    "達新工業": ("1315", "達新"),
+    
+    "上曜": ("1316", "上曜"),
+    
+    "東陽": ("1319", "東陽"),
+    "東陽實業": ("1319", "東陽"),
+    
+    "大洋": ("1321", "大洋"),
+    "大洋塑膠": ("1321", "大洋"),
+    
+    "永裕": ("1323", "永裕"),
+    "永裕塑膠": ("1323", "永裕"),
+    
+    "地球": ("1324", "地球"),
+    "地球化學": ("1324", "地球"),
+    
+    "恆大": ("1325", "恆大"),
+    
+    "台化": ("1326", "台化"),
+    "台灣化學": ("1326", "台化"),
+    "台灣化學纖維": ("1326", "台化"),
+    
+    "台翰": ("1336", "台翰"),
+    
+    "再生": ("1337", "再生-KY"),
+    "再生-KY": ("1337", "再生-KY"),
+    "再生資源": ("1337", "再生-KY"),
+    
+    "廣華": ("1338", "廣華-KY"),
+    "廣華-KY": ("1338", "廣華-KY"),
+    
+    "昭輝": ("1339", "昭輝"),
+    
+    "勝悅": ("1340", "勝悅-KY"),
+    "勝悅-KY": ("1340", "勝悅-KY"),
+    
+    "富林": ("1341", "富林-KY"),
+    "富林-KY": ("1341", "富林-KY"),
+    
+    "八貫": ("1342", "八貫"),
+    
+    # 43開頭化學生技醫療
+    "信立": ("4303", "信立"),
+    "信立化學": ("4303", "信立"),
+    "信立化": ("4303", "信立"),
+    
+    "勝昱": ("4304", "勝昱"),
+    "勝昱精密": ("4304", "勝昱"),
+    "勝昱精": ("4304", "勝昱"),
+    
+    "世坤": ("4305", "世坤"),
+    "世坤科技": ("4305", "世坤"),
+    "世坤科": ("4305", "世坤"),
+    
+    "炎洲": ("4306", "炎洲"),
+    "炎洲科技": ("4306", "炎洲"),
+    "炎洲科": ("4306", "炎洲"),
+    
+    # 99開頭其他
+    "萬國通": ("9950", "萬國通"),
+    "萬國通路": ("9950", "萬國通"),
+}
+
+# =============================================================================
+# 文檔元數據提取器
+# =============================================================================
 
 class DocumentMetadataExtractor:
     """文檔元數據提取器"""
@@ -265,6 +388,216 @@ class DocumentMetadataExtractor:
         
         return result
 
+# =============================================================================
+# 檔名標準化功能
+# =============================================================================
+
+def smart_extract_company_from_filename(filename: str) -> List[str]:
+    """智能從檔名提取公司名稱候選"""
+    candidates = []
+    
+    # 移除副檔名和常見後綴
+    name = filename.replace('.pdf', '').replace('.PDF', '')
+    name = re.sub(r'_esg報告書.*$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'_2024.*$', '', name)
+    name = re.sub(r'_2023.*$', '', name)
+    name = re.sub(r'_2022.*$', '', name)
+    
+    # 策略1：檢查是否包含已知公司名稱
+    for company_name in COMPLETE_COMPANY_MAPPING.keys():
+        if company_name in filename:
+            candidates.append(company_name)
+    
+    # 策略2：分割檔名並檢查每個部分
+    separators = ['_', '-', ' ', '年', 'esg', 'ESG', '報告', '書']
+    parts = [name]
+    
+    for sep in separators:
+        new_parts = []
+        for part in parts:
+            new_parts.extend(part.split(sep))
+        parts = new_parts
+    
+    # 清理和過濾部分
+    clean_parts = []
+    for part in parts:
+        part = part.strip()
+        if len(part) >= 2 and not part.isdigit() and not re.match(r'^202[0-9]$', part):
+            clean_parts.append(part)
+    
+    # 檢查每個部分是否為已知公司
+    for part in clean_parts:
+        for company_name in COMPLETE_COMPANY_MAPPING.keys():
+            if company_name in part or part in company_name:
+                if len(company_name) >= 2:
+                    candidates.append(company_name)
+    
+    # 策略3：檢查檔名中是否包含股票代號
+    for company_name, (stock_code, standard_name) in COMPLETE_COMPANY_MAPPING.items():
+        if stock_code and stock_code in filename:
+            candidates.append(company_name)
+    
+    return list(set(candidates))  # 去重
+
+def extract_year_from_filename(filename: str) -> str:
+    """從檔名提取年度"""
+    year_match = re.search(r'(202[0-9])', filename)
+    return year_match.group(1) if year_match else ""
+
+def standardize_pdf_filenames(data_path: str = None) -> Dict[str, str]:
+    """
+    標準化PDF檔名為：代號_公司名_年度_esg報告書.pdf
+    
+    Returns:
+        Dict: {原檔名: 新檔名} 的映射
+    """
+    if data_path is None:
+        data_path = DATA_PATH
+    
+    data_dir = Path(data_path)
+    pdf_files = list(data_dir.glob("*.pdf"))
+    
+    if not pdf_files:
+        print(f"❌ 在 {data_path} 目錄中找不到PDF文件")
+        return {}
+    
+    print(f"📁 開始標準化 {len(pdf_files)} 個PDF檔名...")
+    print("🎯 使用智能檔名分析 + PDF內容提取雙重策略")
+    print("📋 支援台灣上市櫃公司代號識別")
+    print("=" * 60)
+    
+    metadata_extractor = DocumentMetadataExtractor()
+    rename_mapping = {}
+    
+    for pdf_file in pdf_files:
+        try:
+            print(f"\n📄 處理: {pdf_file.name}")
+            
+            # 策略1：從檔名智能提取公司
+            filename_candidates = smart_extract_company_from_filename(pdf_file.name)
+            print(f"   📝 檔名分析候選: {filename_candidates}")
+            
+            # 策略2：從PDF內容提取
+            try:
+                metadata = metadata_extractor.extract_metadata(str(pdf_file))
+                pdf_company = metadata['company_name']
+                pdf_year = metadata['report_year']
+                print(f"   📄 PDF提取: 公司={pdf_company}, 年度={pdf_year}")
+            except Exception as e:
+                print(f"   ⚠️ PDF提取失敗: {e}")
+                pdf_company = "未知公司"
+                pdf_year = ""
+            
+            # 策略3：從檔名提取年度
+            filename_year = extract_year_from_filename(pdf_file.name)
+            if filename_year:
+                print(f"   📅 檔名提取年度: {filename_year}")
+            
+            # 決定最佳公司名稱和代號
+            stock_code = ""
+            standard_name = ""
+            
+            # 優先使用檔名候選（通常更準確）
+            if filename_candidates:
+                for candidate in filename_candidates:
+                    if candidate in COMPLETE_COMPANY_MAPPING:
+                        stock_code, standard_name = COMPLETE_COMPANY_MAPPING[candidate]
+                        print(f"   ✅ 檔名匹配: {stock_code} {standard_name}")
+                        break
+            
+            # 如果檔名匹配失敗，嘗試PDF提取的名稱
+            if not stock_code and pdf_company != "未知公司":
+                pdf_clean = pdf_company.strip()
+                # 移除常見後綴
+                for suffix in ["股份有限公司", "有限公司", "公司", "工業", "化學", "塑膠"]:
+                    pdf_clean = pdf_clean.replace(suffix, "").strip()
+                
+                for company_name, (code, std_name) in COMPLETE_COMPANY_MAPPING.items():
+                    if company_name in pdf_clean or pdf_clean in company_name:
+                        stock_code = code
+                        standard_name = std_name
+                        print(f"   ✅ PDF匹配: {stock_code} {standard_name}")
+                        break
+            
+            # 決定最終使用的年度
+            final_year = filename_year or pdf_year
+            if final_year == "未知年度":
+                final_year = ""
+            
+            # 生成新檔名
+            if stock_code and standard_name:
+                if final_year:
+                    new_filename = f"{stock_code}_{standard_name}_{final_year}_esg報告書.pdf"
+                else:
+                    new_filename = f"{stock_code}_{standard_name}_esg報告書.pdf"
+                print(f"   🎯 生成標準檔名: {new_filename}")
+            else:
+                # 無法識別的情況，使用清理後的原檔名
+                if filename_candidates:
+                    clean_name = filename_candidates[0]
+                elif pdf_company != "未知公司":
+                    clean_name = re.sub(r'[^\w\s-]', '', pdf_company)
+                    clean_name = re.sub(r'\s+', '', clean_name)
+                else:
+                    # 從原檔名提取合理名稱
+                    base_name = pdf_file.stem
+                    base_name = re.sub(r'_esg.*$', '', base_name, flags=re.IGNORECASE)
+                    base_name = re.sub(r'_202[0-9].*$', '', base_name)
+                    clean_name = base_name[:20]  # 限制長度
+                
+                if final_year:
+                    new_filename = f"{clean_name}_{final_year}_esg報告書.pdf"
+                else:
+                    new_filename = f"{clean_name}_esg報告書.pdf"
+                
+                print(f"   ⚠️ 未識別公司，使用: {new_filename}")
+            
+            # 檢查檔名是否需要更改
+            if pdf_file.name == new_filename:
+                print(f"   ✓ 檔名已標準化")
+                continue
+            
+            # 處理檔名衝突
+            new_path = data_dir / new_filename
+            counter = 1
+            original_new_filename = new_filename
+            
+            while new_path.exists():
+                name_without_ext = original_new_filename.replace('.pdf', '')
+                new_filename = f"{name_without_ext}_{counter}.pdf"
+                new_path = data_dir / new_filename
+                counter += 1
+            
+            if counter > 1:
+                print(f"   📝 避免檔名衝突，使用: {new_filename}")
+            
+            # 執行重命名
+            pdf_file.rename(new_path)
+            rename_mapping[pdf_file.name] = new_filename
+            
+            print(f"   ✅ 重命名成功: {new_filename}")
+            
+        except Exception as e:
+            print(f"   ❌ 處理失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    print(f"\n🎉 檔名標準化完成！")
+    print(f"✅ 成功重命名: {len(rename_mapping)} 個檔案")
+    
+    if rename_mapping:
+        print(f"\n📋 重命名清單:")
+        for old_name, new_name in rename_mapping.items():
+            print(f"   • {old_name}")
+            print(f"     → {new_name}")
+    
+    return rename_mapping
+
+# =============================================================================
+# 原有的預處理功能
+# =============================================================================
+
 def preprocess_documents(pdf_path: str, output_db_path: str = None, metadata: Dict[str, str] = None):
     """預處理PDF文檔並建立向量資料庫"""
     
@@ -382,233 +715,32 @@ def preprocess_multiple_documents(pdf_paths: List[str]) -> Dict[str, Dict]:
     
     return results
 
-# ============================================================================= 
-# 在 preprocess.py 文件末尾（def main(): 之前）添加以下代碼
+# =============================================================================
+# 測試和診斷功能
 # =============================================================================
 
-# 台灣上市櫃塑膠工業公司代號映射表
-# 更新的完整公司映射表
-TAIWAN_COMPANIES_EXTENDED = {
-    # 13開頭塑膠工業
-    "台塑": ("1301", "台塑"),
-    "台灣塑膠": ("1301", "台塑"),
-    "台灣塑膠工業": ("1301", "台塑"),
-    "台塑工業": ("1301", "台塑"),
-    "台塑集團": ("1301", "台塑"),
+def test_company_mapping():
+    """測試公司映射表"""
+    target_companies = ["信立", "勝昱", "世坤", "炎洲", "萬國通", "南亞", "台塑", "三芳"]
     
-    "南亞": ("1303", "南亞"),
-    "南亞塑膠": ("1303", "南亞"),
-    "南亞塑膠工業": ("1303", "南亞"),
-    "南亞公司": ("1303", "南亞"),
+    print("🧪 測試公司映射表")
+    print("=" * 40)
     
-    "台聚": ("1304", "台聚"),
-    "台灣聚合": ("1304", "台聚"),
-    "台灣聚合化學": ("1304", "台聚"),
+    for company in target_companies:
+        if company in COMPLETE_COMPANY_MAPPING:
+            code, name = COMPLETE_COMPANY_MAPPING[company]
+            print(f"✅ {company} → {code}_{name}_2024_esg報告書.pdf")
+        else:
+            print(f"❌ {company} → 未找到映射")
     
-    "華夏": ("1305", "華夏"),
-    "華夏海灣": ("1305", "華夏"),
-    "華夏海灣塑膠": ("1305", "華夏"),
-    "台灣氯乙烯工業": ("1305", "華夏"),
-    
-    "三芳": ("1307", "三芳"),
-    "三芳化學": ("1307", "三芳"),
-    "三芳化學工業": ("1307", "三芳"),
-    "三芳化工": ("1307", "三芳"),
-    
-    "亞聚": ("1308", "亞聚"),
-    "亞洲聚合": ("1308", "亞聚"),
-    
-    "台達化": ("1309", "台達化"),
-    "台灣達化": ("1309", "台達化"),
-    
-    "台苯": ("1310", "台苯"),
-    "台灣苯乙烯": ("1310", "台苯"),
-    
-    "國喬": ("1312", "國喬"),
-    "國喬石化": ("1312", "國喬"),
-    "國橋": ("1312", "國喬"),  # 常見寫法
-    
-    "國喬特": ("1312A", "國喬特"),
-    
-    "聯成": ("1313", "聯成"),
-    "聯成化學": ("1313", "聯成"),
-    "聯成化科": ("1313", "聯成"),
-    "德國萊因技術監護顧問": ("1313", "聯成"),
-    
-    "中石化": ("1314", "中石化"),
-    "中國石油化學": ("1314", "中石化"),
-    
-    "達新": ("1315", "達新"),
-    "達新工業": ("1315", "達新"),
-    
-    "上曜": ("1316", "上曜"),
-    
-    "東陽": ("1319", "東陽"),
-    "東陽實業": ("1319", "東陽"),
-    
-    "大洋": ("1321", "大洋"),
-    "大洋塑膠": ("1321", "大洋"),
-    
-    "永裕": ("1323", "永裕"),
-    "永裕塑膠": ("1323", "永裕"),
-    
-    "地球": ("1324", "地球"),
-    "地球綜合": ("1324", "地球"),
-    "地球化學": ("1324", "地球"),
-    
-    "恆大": ("1325", "恆大"),
-    
-    "台化": ("1326", "台化"),
-    "台灣化學": ("1326", "台化"),
-    "台灣化學纖維": ("1326", "台化"),
-    
-    "台翰": ("1336", "台翰"),
-    
-    "再生": ("1337", "再生-KY"),
-    "再生-KY": ("1337", "再生-KY"),
-    "亞洲塑膠再生": ("1337", "再生-KY"),
-    
-    "廣華": ("1338", "廣華-KY"),
-    "廣華-KY": ("1338", "廣華-KY"),
-    
-    "昭輝": ("1339", "昭輝"),
-    
-    "勝悅": ("1340", "勝悅-KY"),
-    "勝悅新材料": ("1340", "勝悅-KY"),
-    "勝悅-KY": ("1340", "勝悅-KY"),
-    
-    "富林": ("1341", "富林-KY"),
-    "富林-KY": ("1341", "富林-KY"),
-    
-    "八貫": ("1342", "八貫"),
-    
-    # 43開頭化學生技醫療
-    "信立": ("4303", "信立"),
-    "信立化學": ("4303", "信立"),
-    
-    "勝昱": ("4304", "勝昱"),
-    "勝昱精密": ("4304", "勝昱"),
-    
-    "世堃": ("4305", "世坤"),
-    "世堃塑膠": ("4305", "世坤"),
-    
-    "炎洲": ("4306", "炎洲"),  # 更正代號
-    "炎洲股份": ("4306", "炎洲"),  # 更正代號
-    "炎洲科技": ("4306", "炎洲"),
-    
-    # 99開頭其他
-    "萬國通": ("9950", "萬國通"),
-    "萬國通路": ("9950", "萬國通"),
-    
-    # 添加常見的簡稱和變體
-    "信立化": ("4303", "信立"),
-    "勝昱精": ("4304", "勝昱"),
-    "世坤科": ("4305", "世坤"),
-    "炎洲科": ("4306", "炎洲"),
-    "萬國通路股份有限公司": ("9950", "萬國通"),
-}
+    print(f"\n📊 映射表統計:")
+    print(f"   總公司數: {len(COMPLETE_COMPANY_MAPPING)}")
+    print(f"   13開頭塑膠工業: {len([k for k, v in COMPLETE_COMPANY_MAPPING.items() if v[0].startswith('13')])}")
+    print(f"   43開頭化學生技: {len([k for k, v in COMPLETE_COMPANY_MAPPING.items() if v[0].startswith('43')])}")
+    print(f"   其他公司: {len([k for k, v in COMPLETE_COMPANY_MAPPING.items() if not v[0].startswith(('13', '43'))])}")
 
-def extract_company_from_filename(filename: str) -> str:
-    """從檔名中提取公司名稱"""
-    # 移除副檔名
-    name_without_ext = filename.replace('.pdf', '').replace('.PDF', '')
-    
-    # 常見的分隔符
-    separators = ['_', '-', ' ', '年', '2024', '2023', '2022', 'esg', 'ESG', '報告', '書']
-    
-    # 嘗試不同的分割方式
-    possible_names = [name_without_ext]
-    
-    for sep in separators:
-        parts = name_without_ext.split(sep)
-        for part in parts:
-            clean_part = part.strip()
-            if len(clean_part) >= 2 and not clean_part.isdigit():
-                possible_names.append(clean_part)
-    
-    # 返回最長的可能名稱
-    valid_names = [name for name in possible_names if len(name) >= 2 and not name.isdigit()]
-    return max(valid_names, key=len) if valid_names else ""
-
-def enhanced_find_company_code_and_name(extracted_company_name: str, filename: str = "") -> Tuple[str, str, str]:
-    """
-    增強版公司代號和名稱查找
-    
-    Returns:
-        Tuple: (股票代號, 標準公司名, 來源)
-    """
-    
-    def try_match_company(name: str) -> Tuple[str, str]:
-        if not name:
-            return "", ""
-        
-        # 清理名稱
-        clean_name = name.strip()
-        
-        # 移除常見後綴進行匹配
-        suffixes_to_remove = [
-            "股份有限公司", "有限公司", "股份", "公司",
-            "工業股份有限公司", "工業有限公司", "工業股份", "工業",
-            "化學工業股份有限公司", "化學工業有限公司", "化學工業股份", "化學工業", "化學",
-            "塑膠工業股份有限公司", "塑膠工業有限公司", "塑膠工業股份", "塑膠工業", "塑膠",
-        ]
-        
-        # 生成名稱變體
-        name_variants = [clean_name]
-        
-        for suffix in suffixes_to_remove:
-            if clean_name.endswith(suffix):
-                core_name = clean_name[:-len(suffix)].strip()
-                if core_name:
-                    name_variants.append(core_name)
-        
-        # 精確匹配
-        for variant in name_variants:
-            if variant in TAIWAN_COMPANIES_EXTENDED:
-                code, standard_name = TAIWAN_COMPANIES_EXTENDED[variant]
-                return code, standard_name
-        
-        # 模糊匹配
-        for variant in name_variants:
-            for known_name, (code, standard_name) in TAIWAN_COMPANIES_EXTENDED.items():
-                if len(known_name) >= 2:
-                    # 檢查包含關係
-                    if (known_name in variant or variant in known_name) and len(known_name) >= 3:
-                        return code, standard_name
-                    # 檢查開頭匹配
-                    if variant.startswith(known_name) or known_name.startswith(variant):
-                        if len(known_name) >= 2:
-                            return code, standard_name
-        
-        return "", ""
-    
-    # 策略1：使用PDF提取的公司名稱
-    if extracted_company_name and extracted_company_name != "未知公司":
-        code, name = try_match_company(extracted_company_name)
-        if code and name:
-            return code, name, "PDF內容"
-    
-    # 策略2：使用檔名提取的公司名稱
-    if filename:
-        filename_company = extract_company_from_filename(filename)
-        if filename_company:
-            code, name = try_match_company(filename_company)
-            if code and name:
-                return code, name, "檔名分析"
-    
-    # 策略3：直接分析檔名中的關鍵字
-    if filename:
-        filename_lower = filename.lower()
-        for known_name, (code, standard_name) in TAIWAN_COMPANIES_EXTENDED.items():
-            if known_name.lower() in filename_lower and len(known_name) >= 2:
-                return code, standard_name, "檔名關鍵字"
-    
-    return "", "", "未識別"
-
-def standardize_pdf_filenames_enhanced(data_path: str = None) -> Dict[str, str]:
-    """
-    增強版PDF檔名標準化
-    """
+def diagnose_filename_issues(data_path: str = None):
+    """診斷檔名問題"""
     if data_path is None:
         data_path = DATA_PATH
     
@@ -617,125 +749,33 @@ def standardize_pdf_filenames_enhanced(data_path: str = None) -> Dict[str, str]:
     
     if not pdf_files:
         print(f"❌ 在 {data_path} 目錄中找不到PDF文件")
-        return {}
+        return
     
-    print(f"📁 開始標準化 {len(pdf_files)} 個PDF檔名...")
-    print("📋 支援台灣上市櫃公司代號識別（增強版）")
-    print("🔍 多策略匹配：PDF內容 + 檔名分析 + 關鍵字匹配")
-    print("=" * 70)
-    
-    metadata_extractor = DocumentMetadataExtractor()
-    rename_mapping = {}
+    print("🔍 診斷PDF檔名問題")
+    print("=" * 50)
     
     for pdf_file in pdf_files:
-        try:
-            print(f"📄 處理: {pdf_file.name}")
-            
-            # 提取元數據
-            metadata = metadata_extractor.extract_metadata(str(pdf_file))
-            extracted_company = metadata['company_name']
-            report_year = metadata['report_year']
-            
-            print(f"   🏢 PDF提取公司名稱: {extracted_company}")
-            print(f"   📅 PDF提取年度: {report_year}")
-            
-            # 從檔名提取公司名稱作為備選
-            filename_company = extract_company_from_filename(pdf_file.name)
-            print(f"   📝 檔名分析公司名稱: {filename_company}")
-            
-            # 增強版公司識別
-            stock_code, standard_company_name, source = enhanced_find_company_code_and_name(
-                extracted_company, pdf_file.name
-            )
-            
-            # 決定使用的公司名稱和前綴
-            if stock_code and standard_company_name:
-                print(f"   ✅ 識別為: {stock_code} {standard_company_name} (來源: {source})")
-                company_for_filename = standard_company_name
-                prefix = stock_code
-            else:
-                print(f"   ⚠️ 未識別為已知公司，使用原名稱")
-                # 選擇最佳的公司名稱
-                if filename_company and len(filename_company) > len(extracted_company):
-                    company_for_filename = filename_company
-                    print(f"   📝 使用檔名提取的名稱: {filename_company}")
-                else:
-                    safe_company_name = re.sub(r'[^\w\s-]', '', extracted_company)
-                    safe_company_name = re.sub(r'\s+', '', safe_company_name)
-                    company_for_filename = safe_company_name
-                    print(f"   📄 使用PDF提取的名稱: {safe_company_name}")
-                prefix = ""
-            
-            # 提取年度（優先使用PDF提取的，其次從檔名提取）
-            final_year = report_year
-            if not final_year or final_year == "未知年度":
-                # 從檔名提取年度
-                year_match = re.search(r'(202[0-9])', pdf_file.name)
-                if year_match:
-                    final_year = year_match.group(1)
-                    print(f"   📅 從檔名提取年度: {final_year}")
-            
-            # 生成新檔名
-            if prefix:
-                if final_year and final_year != "未知年度":
-                    new_filename = f"{prefix}_{company_for_filename}_{final_year}_esg報告書.pdf"
-                else:
-                    new_filename = f"{prefix}_{company_for_filename}_esg報告書.pdf"
-            else:
-                if final_year and final_year != "未知年度":
-                    new_filename = f"{company_for_filename}_{final_year}_esg報告書.pdf"
-                else:
-                    new_filename = f"{company_for_filename}_esg報告書.pdf"
-            
-            # 檢查是否需要重命名
-            if pdf_file.name == new_filename:
-                print(f"   ✓ 檔名已標準化: {new_filename}")
-                continue
-            
-            # 檢查新檔名是否已存在
-            new_path = data_dir / new_filename
-            counter = 1
-            original_new_filename = new_filename
-            
-            while new_path.exists():
-                print(f"   ⚠️ 目標檔名已存在: {new_filename}")
-                name_without_ext = original_new_filename.replace('.pdf', '')
-                new_filename = f"{name_without_ext}_{counter}.pdf"
-                new_path = data_dir / new_filename
-                counter += 1
-            
-            if counter > 1:
-                print(f"   📝 使用替代檔名: {new_filename}")
-            
-            # 執行重命名
-            pdf_file.rename(new_path)
-            rename_mapping[pdf_file.name] = new_filename
-            
-            print(f"   ✅ 重命名成功:")
-            print(f"      {pdf_file.name}")
-            print(f"      → {new_filename}")
-            
-        except Exception as e:
-            print(f"   ❌ 處理失敗: {e}")
-            continue
+        print(f"\n📄 診斷: {pdf_file.name}")
         
-        print()  # 空行分隔
-    
-    print(f"🎉 檔名標準化完成！")
-    print(f"✅ 成功重命名: {len(rename_mapping)} 個檔案")
-    
-    if rename_mapping:
-        print(f"\n📋 重命名清單:")
-        for old_name, new_name in rename_mapping.items():
-            print(f"   • {old_name}")
-            print(f"     → {new_name}")
-    
-    return rename_mapping
-
-# 為了保持向後兼容，保留原函數名
-def standardize_pdf_filenames(data_path: str = None) -> Dict[str, str]:
-    """向後兼容的函數名"""
-    return standardize_pdf_filenames_enhanced(data_path)
+        # 檔名分析
+        candidates = smart_extract_company_from_filename(pdf_file.name)
+        year = extract_year_from_filename(pdf_file.name)
+        
+        print(f"   📝 檔名候選公司: {candidates}")
+        print(f"   📅 檔名提取年度: {year}")
+        
+        # 檢查映射
+        matched = False
+        for candidate in candidates:
+            if candidate in COMPLETE_COMPANY_MAPPING:
+                code, name = COMPLETE_COMPANY_MAPPING[candidate]
+                print(f"   ✅ 匹配: {candidate} → {code} {name}")
+                matched = True
+                break
+        
+        if not matched:
+            print(f"   ❌ 無法自動匹配")
+            print(f"   💡 建議手動檢查公司名稱是否在映射表中")
 
 def main():
     """主函數"""
@@ -779,4 +819,23 @@ def main():
                 print(f"❌ 批量預處理失敗: {e}")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--test":
+            test_company_mapping()
+        elif sys.argv[1] == "--diagnose":
+            diagnose_filename_issues()
+        elif sys.argv[1] == "--standardize":
+            result = standardize_pdf_filenames()
+            if result:
+                print(f"✅ 標準化完成，處理了 {len(result)} 個檔案")
+        else:
+            print("用法:")
+            print("  python preprocess.py --test        # 測試公司映射表")
+            print("  python preprocess.py --diagnose    # 診斷檔名問題")
+            print("  python preprocess.py --standardize # 執行檔名標準化")
+            print("  python preprocess.py              # 執行預處理")
+    else:
+        # 預設執行測試
+        test_company_mapping()
